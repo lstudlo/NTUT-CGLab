@@ -240,10 +240,13 @@ void RenderScene() {
         glScissor(vpX, vpY, vpWidth, vpHeight);
 
         // Store viewport dimensions for this viewport's state
-        viewports[i].currentViewport[0] = vpX;
-        viewports[i].currentViewport[1] = vpY;
-        viewports[i].currentViewport[2] = vpWidth;
-        viewports[i].currentViewport[3] = vpHeight;
+
+        glGetIntegerv(GL_VIEWPORT, viewports[i].currentViewport);
+
+        // viewports[i].currentViewport[0] = vpX;
+        // viewports[i].currentViewport[1] = vpY;
+        // viewports[i].currentViewport[2] = vpWidth;
+        // viewports[i].currentViewport[3] = vpHeight;
 
 
         // --- 2. Setup Projection Matrix ---
@@ -443,56 +446,54 @@ void KeyboardUp(unsigned char key, int x, int y) {
 }
 
 
-// Helper function for MouseClick: Tries unprojection, falls back to plane intersection
 bool GetWorldCoordsOnClick(int winX, int winY, int viewportIndex, Point3D& worldPos) {
     ViewportState& vpState = viewports[viewportIndex]; // Reference to the target viewport's state
 
-    // Use the specific viewport's dimensions and matrices
-    GLint* vp = vpState.currentViewport; // vp[0]=x, vp[1]=y, vp[2]=width, vp[3]=height
+    // Use the specific viewport's dimensions and matrices CAPTURED BY glGetIntegerv
+    GLint* vp = vpState.currentViewport; // vp[0]=vx, vp[1]=vy, vp[2]=vw, vp[3]=vh (OpenGL coords, bottom-left origin)
     GLdouble* mv = vpState.currentViewMatrix;
     GLdouble* proj = vpState.currentProjectionMatrix;
 
-    // Adjust mouse Y for OpenGL's bottom-left origin
-    int adjustedY = vp[3] - (winY - vp[1]); // Y relative to viewport bottom
-    // Adjust mouse X for viewport's X offset
-    int adjustedX = winX - vp[0]; // X relative to viewport left
+    // 1. Convert GLUT window Y (top-down) to OpenGL window Y (bottom-up)
+    int winY_gl = windowHeight - winY;
 
-
-    // Clamp adjusted coords to be within the viewport dimensions for reading pixels
-    if (adjustedX < 0 || adjustedX >= vp[2] || adjustedY < 0 || adjustedY >= vp[3]) {
-        printf("  -> Click outside calculated viewport bounds.\n");
-        return false; // Click was outside this viewport's area
-    }
+    // --- Debug Print ---
+    // printf("  VP%d Click: win(%d,%d) -> win_gl(%d,%d) | vp(%d,%d,%d,%d)\n",
+    //        viewportIndex, winX, winY, winX, winY_gl,
+    //        vp[0], vp[1], vp[2], vp[3]);
+    // --- End Debug Print ---
 
     // --- Attempt 1: Unproject using depth buffer ---
     float winZ;
-    // Read depth from the correct screen location (vp[0]+adjustedX, vp[1]+adjustedY)
-    glReadPixels(vp[0] + adjustedX, vp[1] + adjustedY, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &winZ);
+    // 3. Read depth using OPENGL WINDOW COORDINATES (bottom-left origin)
+    glReadPixels(winX, winY_gl, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &winZ);
 
     GLdouble worldX, worldY, worldZ;
+    // 4. Unproject using WINDOW coordinates (not viewport-relative)
+    // FIX: Pass window coordinates directly to gluUnProject
     GLint success = gluUnProject(
-        (GLdouble)adjustedX, // Use adjusted X relative to viewport
-        (GLdouble)adjustedY, // Use adjusted Y relative to viewport
-        (GLdouble)winZ,
-        mv, proj, vp, // Use the viewport-specific matrices and dimensions
+        (GLdouble)winX,         // Window X - NOT adjusted
+        (GLdouble)winY_gl,      // Window Y - NOT adjusted
+        (GLdouble)winZ,         // Depth read at that pixel
+        mv, proj, vp,           // Use the viewport-specific matrices and dimensions
         &worldX, &worldY, &worldZ
     );
 
     if (success == GL_TRUE && winZ < UNPROJECT_FAR_PLANE_THRESHOLD) {
-        // Success! Clicked on an object.
         worldPos = {(float)worldX, (float)worldY, (float)worldZ};
-        printf("  -> Unproject success (hit object, depth=%.3f)\n", winZ);
+        // printf("  -> Unproject success (hit object, depth=%.3f)\n", winZ); // Keep for debugging if needed
         return true;
     } else {
-         printf("  -> Unproject failed or hit background (depth=%.3f). Trying ray-plane intersection...\n", winZ);
+         // printf("  -> Unproject failed or hit background (depth=%.3f). Trying ray-plane intersection...\n", winZ); // Keep for debugging if needed
          // --- Attempt 2: Ray-Plane Intersection (Y=0 plane) ---
 
-         // Get ray direction by unprojecting near and far points
+         // Get ray direction by unprojecting near and far points using WINDOW coords
          Point3D nearPoint, farPoint;
          GLdouble nearX, nearY, nearZ, farX, farY, farZ;
 
-         GLint nearSuccess = gluUnProject((GLdouble)adjustedX, (GLdouble)adjustedY, 0.0, mv, proj, vp, &nearX, &nearY, &nearZ);
-         GLint farSuccess = gluUnProject((GLdouble)adjustedX, (GLdouble)adjustedY, 1.0, mv, proj, vp, &farX, &farY, &farZ);
+         // FIX: Use window coordinates, not viewport-relative
+         GLint nearSuccess = gluUnProject((GLdouble)winX, (GLdouble)winY_gl, 0.0, mv, proj, vp, &nearX, &nearY, &nearZ);
+         GLint farSuccess = gluUnProject((GLdouble)winX, (GLdouble)winY_gl, 1.0, mv, proj, vp, &farX, &farY, &farZ);
 
          if (!nearSuccess || !farSuccess) {
              printf("  -> Failed to unproject near/far points for ray casting.\n");
@@ -501,42 +502,29 @@ bool GetWorldCoordsOnClick(int winX, int winY, int viewportIndex, Point3D& world
          nearPoint = {(float)nearX, (float)nearY, (float)nearZ};
          farPoint = {(float)farX, (float)farY, (float)farZ};
 
-         // Ray Origin is the camera position (or nearPoint if view matrix includes camera pos)
-         // Ray Direction = farPoint - nearPoint
          Point3D rayDir = {farPoint.x - nearPoint.x, farPoint.y - nearPoint.y, farPoint.z - nearPoint.z};
-         Point3D rayOrigin = nearPoint; // Use near point as ray origin
+         Point3D rayOrigin = nearPoint;
 
-         // Plane: Y = 0 (Plane Normal = {0, 1, 0}, point on plane = {0, 0, 0})
          float planeNormalY = 1.0f;
-         float planeDist = 0.0f; // Distance from origin along normal (0 for Y=0 plane)
-
-         // Calculate intersection parameter 't'
-         // t = -(RayOrigin . PlaneNormal + PlaneDist) / (RayDirection . PlaneNormal)
-         // For Y=0 plane: t = -(RayOrigin.y * 1.0 + 0) / (RayDirection.y * 1.0)
-         float denominator = rayDir.y; // RayDirection dot PlaneNormal
+         float denominator = rayDir.y;
          if (fabs(denominator) < 1e-6) {
-             // Ray is parallel to the plane (or camera is looking horizontally)
              printf("  -> Ray is parallel to the ground plane. Cannot intersect.\n");
-             // Optional: Could project onto a different plane (e.g., X=0 or Z=0) or return failure.
              return false;
          }
          float t = -rayOrigin.y / denominator;
 
-         // Calculate intersection point: P = RayOrigin + t * RayDirection
          worldPos.x = rayOrigin.x + t * rayDir.x;
-         worldPos.y = rayOrigin.y + t * rayDir.y; // Should be close to 0
+         worldPos.y = 0.0f; // Force it exactly onto the Y=0 plane
          worldPos.z = rayOrigin.z + t * rayDir.z;
 
-         printf("  -> Ray-Plane Intersection at Y=0: (%.2f, %.2f, %.2f)\n", worldPos.x, worldPos.y, worldPos.z);
-         worldPos.y = 0.0f; // Force it exactly onto the plane
+         // printf("  -> Ray-Plane Intersection at Y=0: (%.2f, %.2f, %.2f)\n", worldPos.x, worldPos.y, worldPos.z); // Keep for debugging if needed
 
-         // Optional: Check if intersection point is within reasonable bounds
+         // Optional bound check remains the same
          float max_coord = GRID_SIZE * 2.0f;
          if (fabs(worldPos.x) > max_coord || fabs(worldPos.z) > max_coord) {
               printf("  -> Intersection point is very far away, ignoring.\n");
               return false;
          }
-
 
          return true;
     }
