@@ -2,7 +2,6 @@
 #include <cmath>
 #include <GL/freeglut.h>
 #include <iostream>
-#include <vector> // Use vector for state storage if preferred, but array is fine for fixed count
 #include <cstring> // For memcpy
 
 // --- Constants ---
