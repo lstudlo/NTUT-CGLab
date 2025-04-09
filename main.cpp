@@ -2,9 +2,8 @@
 #include <cmath>
 #include <GL/freeglut.h>
 #include <iostream>
-#include <cstring> // For memcpy
-#include <iomanip> // For std::fixed, std::setprecision
-#include <algorithm> // For std::clamp (或手動 clamp)
+#include <cstring>
+#include <iomanip>
 
 // --- 常數定義 ---
 const float PI = acos(-1.0f);
