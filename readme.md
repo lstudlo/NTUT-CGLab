@@ -1,73 +1,50 @@
-# 2D 網格應用程式 - 使用說明
+# OpenGL OBJ Viewer
 
-## 程式概述
+## Overview
 
-此應用程式使用 C++ 和 FreeGLUT 實現一個可互動的 2D 網格系統，可讓使用者點選單元格並更改網格大小。
+This is a simple 3D object viewer written in C++ using OpenGL and the FreeGLUT library. It allows users to load and view Wavefront OBJ (`.obj`) model files, interactively manipulate the object and camera, and change rendering styles.
 
-## 操作說明
+## Features
 
-* **網格**: 畫面中央顯示一個以原點為中心的二維網格。
-* **選擇單元格**: 使用滑鼠左鍵點擊任意單元格以選取它。
-* **變更網格尺寸**: 使用滑鼠右鍵開啟選單，可選擇不同的網格尺寸。
+* **OBJ Model Loading:** Loads 3D models from `.obj` files (supports vertex `v` and face `f` tags).
+* **Multiple Rendering Modes:**
+  * **Point Mode:** Renders only the vertices of the model.
+  * **Line Mode (Wireframe):** Renders the edges of the model's faces.
+  * **Face Mode (Solid):** Renders filled polygons for the model's faces (default).
+* **Color Modes:**
+  * **Single Color:** Renders the entire model in a default white color.
+  * **Random Color:** Assigns a random color to each face (in Face mode) or vertex (in Point mode when no faces are loaded).
+* **Interactive Transformations:**
+  * **Object Translation:** Move the object along the X, Y, and Z axes.
+  * **Object Rotation:** Rotate the object around the X, Y, and Z axes.
+* **Camera Controls:** Move the camera forward/backward, left/right, and up/down.
+* **Automatic Centering and Scaling:** Automatically calculates the model's bounding box and adjusts the initial camera view to fit the loaded model.
+* **Coordinate Axes:** Displays reference X (Red), Y (Green), and Z (Blue) axes for orientation.
+* **Smooth Movement:** Uses key state tracking for continuous transformations while keys are held down.
+* **Right-Click Menu:** Provides easy access to:
+  * Load predefined or custom OBJ files.
+  * Switch between rendering modes.
+  * Switch between color modes.
+  * Reset the view (object position/rotation and camera).
+  * Quit the application.
+* **Command-Line Loading:** Optionally load an OBJ file specified as a command-line argument.
+* **Default File Loading:** Attempts to load a default file (`Models/gourd.obj`) if no command-line argument is given.
 
----
+## Dependencies
 
-## 功能特點
+To compile and run this application, you need:
 
-### 顯示功能
-* **網格視圖**: 預設顯示 10×10 網格 (從 -10 到 10)。
-* **原點標示**: 原點 (0,0) 以藍色突顯顯示在網格中央。
-* **選擇視覺效果**: 被選擇的單元格以紅色填充顯示。
+1.  **A C++ Compiler:** A modern C++ compiler (supporting C++11 or later features like `auto`, `<limits>`, etc.). Examples: GCC (g++), Clang, MSVC.
+2.  **OpenGL Libraries:** Typically installed with your graphics drivers.
+3.  **FreeGLUT:** The Free OpenGL Utility Toolkit library for windowing and input handling.
+  * **Linux (Debian/Ubuntu):** `sudo apt-get update && sudo apt-get install build-essential freeglut3-dev`
+  * **Linux (Fedora):** `sudo dnf install gcc-c++ freeglut-devel`
+  * **macOS (using Homebrew):** `brew install freeglut`
+  * **Windows:** Download pre-compiled binaries (check the FreeGLUT website or use a package manager like vcpkg). Ensure `freeglut.dll` is accessible at runtime, and link against `freeglut.lib`.
 
-### 互動性
-* **左鍵點擊**: 點擊網格的任何單元格以選取它。
-* **座標顯示**: 當選取單元格時，其座標 (x, y) 會在控制台上顯示。
-* **右鍵選單**: 右鍵點擊以開啟選單，可選擇網格尺寸：
-    * 10 x 10 (-10 到 10)
-    * 15 x 15 (-15 到 15)
-    * 20 x 20 (-20 到 20)
+## Building
 
-### 網格尺寸調整
-* **重置選擇**: 變更網格尺寸時，已選取的單元格會被重置。
-* **動態調整**: 網格會根據選擇的尺寸自動重繪。
-
----
-
-## 座標系統
-
-* **網格座標**: 網格使用笛卡爾座標系統，原點 (0,0) 位於中央。
-* **座標範圍**:
-    * 10 尺寸下，範圍為 x: (-10 ~ 10), y: (-10 ~ 10)
-    * 15 尺寸下，範圍為 x: (-15 ~ 15), y: (-15 ~ 15)
-    * 20 尺寸下，範圍為 x: (-20 ~ 20), y: (-20 ~ 20)
-
----
-
-## 視覺元素
-
-* **單元格**: 網格由許多可點擊的單元格組成。
-* **網格線**: 灰色線條用於分隔單元格。
-* **原點單元格**: 座標 (0,0) 的原點單元格以藍色填充顯示。
-* **已選擇單元格**: 所有已被點擊選擇的單元格以紅色填充顯示。
-
----
-
-## 編譯與執行
-
-要編譯此程式，您需要安裝 FreeGLUT 開發庫及相關依賴：
+The specific compilation command depends on your system and compiler. A typical command using g++ on Linux or macOS might look like this:
 
 ```bash
-# Ubuntu/Debian
-sudo apt-get install freeglut3-dev
-
-# 編譯命令
-g++ -o 2d_grid main.cpp -lGL -lGLU -lglut
-```
-
-執行編譯後的程式：
-
-```bash
-./2d_grid
-```
-
----
+g++ your_source_file.cpp -o obj_viewer -lGL -lglut -lm
