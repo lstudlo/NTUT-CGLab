@@ -1,615 +1,543 @@
-/**
- * OBJ File Viewer
- *
- * A program that reads and renders OBJ files with various options:
- * - Multiple rendering modes (point, line, face)
- * - Color modes (single, random)
- * - Object transformations
- * - Adjustable camera
- * - Auto-scaling to fit screen
- */
-
 #include <GL/freeglut.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
-#include <time.h>
+#include <iostream>
 #include <vector>
 #include <string>
 #include <fstream>
 #include <sstream>
-#include <iostream>
+#include <cmath>
+#include <limits>
+#include <cstdlib> // For std::rand, std::srand, exit()
+#include <ctime>   // For std::time
+#include <map>     // For key state tracking
+#include <cctype>  // For tolower
 
-// Structure to hold a 3D vertex
-typedef struct {
-    float x, y, z;
-} Vertex;
-
-// Structure to hold a normal vector
-typedef struct {
-    float x, y, z;
-} Normal;
-
-// Structure to hold a face (indices to vertices)
-typedef struct {
-    int vertexIndices[3];
-} Face;
-
-// Render modes
-enum RenderMode {
-    POINT_MODE,
-    LINE_MODE,
-    FACE_MODE
+// --- Data Structures ---
+struct Vec3f {
+    float x = 0.0f, y = 0.0f, z = 0.0f;
 };
 
-// Color modes
-enum ColorMode {
-    SINGLE_COLOR,
-    RANDOM_COLORS
+struct Face {
+    std::vector<int> vertexIndices;
 };
 
-// Global variables
-std::vector<Vertex> vertices;
-std::vector<Normal> normals;
+// --- Global Variables ---
+// Window
+int windowWidth = 800;
+int windowHeight = 600;
+
+// Model Data
+std::vector<Vec3f> vertices;
 std::vector<Face> faces;
-std::vector<int> normalIndices; // For storing normal indices for faces
-std::vector<std::string> objFiles;
-float rotX = 0.0f, rotY = 0.0f, rotZ = 0.0f;
-float transX = 0.0f, transY = 0.0f, transZ = 0.0f;
-float cameraX = 0.0f, cameraY = 0.0f, cameraZ = 5.0f;
-float lookAtX = 0.0f, lookAtY = 0.0f, lookAtZ = 0.0f;
-RenderMode renderMode = FACE_MODE;
-ColorMode colorMode = SINGLE_COLOR;
-float boundingBoxMin[3] = {0.0f, 0.0f, 0.0f};
-float boundingBoxMax[3] = {0.0f, 0.0f, 0.0f};
-int windowWidth = 800, windowHeight = 600;
-float objectScale = 1.0f;
-bool firstLoad = true;
+Vec3f modelMin = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
+Vec3f modelMax = { std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest() };
+Vec3f modelCenter = { 0.0f, 0.0f, 0.0f };
+float modelSize = 1.0f;
+std::string currentFilePath = "";
 
-// Function prototypes
+// Rendering Modes
+enum RenderMode { POINT, LINE, FACE };
+RenderMode currentRenderMode = FACE;
+enum ColorMode { SINGLE, RANDOM };
+ColorMode currentColorMode = SINGLE;
+
+// Transformations
+float translateX = 0.0f, translateY = 0.0f, translateZ = 0.0f;
+float rotateX = 0.0f, rotateY = 0.0f, rotateZ = 0.0f;
+
+// Camera
+Vec3f cameraPos = { 0.0f, 0.0f, 5.0f };
+Vec3f lookAtPos = { 0.0f, 0.0f, 0.0f };
+Vec3f upVector = { 0.0f, 1.0f, 0.0f };
+float fovY = 45.0f;
+float zNear = 0.1f;
+float zFar = 100.0f;
+
+// --- Key State Tracking for Smooth Movement ---
+std::map<unsigned char, bool> keyStates;
+
+// --- Function Prototypes ---
 void display();
-void reshape(int width, int height);
+void reshape(int w, int h);
 void keyboard(unsigned char key, int x, int y);
-void specialKeys(int key, int x, int y);
-void loadObjFile(const char* filename);
-void calculateBoundingBox();
-void fitObjectToScreen();
+void keyboardUp(unsigned char key, int x, int y); // Key release callback
+void update();                                  // Idle callback for continuous updates
+void mouse(int button, int state, int x, int y);
 void createMenus();
-void menuCallback(int value);
-void initObjFiles();
+void processMainMenu(int option);
+void processFileMenu(int option);
+void processRenderMenu(int option);
+void processColorMenu(int option);
+bool loadObj(const std::string& filename);
+void calculateBoundingBox();
+void setupInitialCamera();
+void resetView();
+void loadAndSetupObject(const std::string& filename);
+void drawAxes(float length); // Function to draw XYZ axes
 
-// Initialize the application
-void init() {
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glEnable(GL_DEPTH_TEST);
+// --- Menu IDs ---
+#define MENU_FILE_1 1
+#define MENU_FILE_2 2
+#define MENU_FILE_3 3
+#define MENU_FILE_4 4
+#define MENU_FILE_LOAD 6
 
-    // Lighting is now disabled
-    // glEnable(GL_LIGHTING);
-    // glEnable(GL_LIGHT0);
+#define MENU_RENDER_POINT 10
+#define MENU_RENDER_LINE 11
+#define MENU_RENDER_FACE 12
 
-    // Light parameters are kept but won't be used since lighting is disabled
-    GLfloat light_position[] = { 1.0f, 1.0f, 1.0f, 0.0f }; // Directional light
-    GLfloat light_ambient[] = { 0.2f, 0.2f, 0.2f, 1.0f };
-    GLfloat light_diffuse[] = { 1.0f, 1.0f, 1.0f, 1.0f };
-    GLfloat light_specular[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+#define MENU_COLOR_SINGLE 20
+#define MENU_COLOR_RANDOM 21
 
-    glLightfv(GL_LIGHT0, GL_POSITION, light_position);
-    glLightfv(GL_LIGHT0, GL_AMBIENT, light_ambient);
-    glLightfv(GL_LIGHT0, GL_DIFFUSE, light_diffuse);
-    glLightfv(GL_LIGHT0, GL_SPECULAR, light_specular);
+#define MENU_RESET_VIEW 30
+#define MENU_QUIT 99
 
-    // Material properties are kept but won't be used since lighting is disabled
-    GLfloat mat_ambient[] = { 0.7f, 0.5f, 0.3f, 1.0f }; // Brown for teapot
-    GLfloat mat_diffuse[] = { 0.7f, 0.5f, 0.3f, 1.0f };
-    GLfloat mat_specular[] = { 1.0f, 1.0f, 1.0f, 1.0f };
-    GLfloat mat_shininess[] = { 50.0f };
+// --- Placeholder File Paths (UPDATED to look in Models/ subdirectory) ---
+// *** Make sure to create a 'Models' folder next to your executable ***
+// *** and place the OBJ files inside it. ***
+const std::string file1Path = "Models/gourd.obj";
+const std::string file2Path = "Models/octahedron.obj";
+const std::string file3Path = "Models/teapot.obj";
+const std::string file4Path = "Models/teddy.obj";
 
-    glMaterialfv(GL_FRONT, GL_AMBIENT, mat_ambient);
-    glMaterialfv(GL_FRONT, GL_DIFFUSE, mat_diffuse);
-    glMaterialfv(GL_FRONT, GL_SPECULAR, mat_specular);
-    glMaterialfv(GL_FRONT, GL_SHININESS, mat_shininess);
+// --- Function Implementations ---
 
-    srand(time(NULL));
-
-    // Initialize the list of available OBJ files
-    initObjFiles();
-
-    // Create menus
-    createMenus();
-
-    // Load the first OBJ file
-    if (!objFiles.empty()) {
-        loadObjFile(objFiles[0].c_str());
-    }
-}
-
-// Initialize the list of available OBJ files
-void initObjFiles() {
-    // Add the exact OBJ files from the user's directory
-    objFiles.push_back("gourd.obj");
-    objFiles.push_back("octahedron.obj");
-    objFiles.push_back("teapot.obj");
-    objFiles.push_back("teddy.obj");
-}
-
-// Calculate the bounding box of the loaded object
-void calculateBoundingBox() {
-    if (vertices.empty()) return;
-
-    // Initialize min and max with the first vertex
-    boundingBoxMin[0] = boundingBoxMax[0] = vertices[0].x;
-    boundingBoxMin[1] = boundingBoxMax[1] = vertices[0].y;
-    boundingBoxMin[2] = boundingBoxMax[2] = vertices[0].z;
-
-    // Find the min and max of all vertices
-    for (size_t i = 1; i < vertices.size(); i++) {
-        // Update X
-        if (vertices[i].x < boundingBoxMin[0]) boundingBoxMin[0] = vertices[i].x;
-        if (vertices[i].x > boundingBoxMax[0]) boundingBoxMax[0] = vertices[i].x;
-
-        // Update Y
-        if (vertices[i].y < boundingBoxMin[1]) boundingBoxMin[1] = vertices[i].y;
-        if (vertices[i].y > boundingBoxMax[1]) boundingBoxMax[1] = vertices[i].y;
-
-        // Update Z
-        if (vertices[i].z < boundingBoxMin[2]) boundingBoxMin[2] = vertices[i].z;
-        if (vertices[i].z > boundingBoxMax[2]) boundingBoxMax[2] = vertices[i].z;
-    }
-
-    printf("Bounding Box: Min [%f, %f, %f], Max [%f, %f, %f]\n",
-           boundingBoxMin[0], boundingBoxMin[1], boundingBoxMin[2],
-           boundingBoxMax[0], boundingBoxMax[1], boundingBoxMax[2]);
-}
-
-// Automatically fit the object to the screen
-void fitObjectToScreen() {
-    calculateBoundingBox();
-
-    // Calculate the center of the bounding box
-    float centerX = (boundingBoxMin[0] + boundingBoxMax[0]) / 2.0f;
-    float centerY = (boundingBoxMin[1] + boundingBoxMax[1]) / 2.0f;
-    float centerZ = (boundingBoxMin[2] + boundingBoxMax[2]) / 2.0f;
-
-    // Calculate the size of the bounding box
-    float sizeX = boundingBoxMax[0] - boundingBoxMin[0];
-    float sizeY = boundingBoxMax[1] - boundingBoxMin[1];
-    float sizeZ = boundingBoxMax[2] - boundingBoxMin[2];
-
-    // Find the maximum dimension
-    float maxDimension = sizeX;
-    if (sizeY > maxDimension) maxDimension = sizeY;
-    if (sizeZ > maxDimension) maxDimension = sizeZ;
-
-    // Calculate the scale to fit the object to 70-80% of the screen
-    objectScale = 1.75f / maxDimension;  // Targeting ~75% of view
-
-    // Reset translation to center the object
-    transX = -centerX;
-    transY = -centerY;
-    transZ = -centerZ;
-
-    // Set consistent camera position for all models
-    // This ensures all models are viewed from the same angle and distance
-    if (firstLoad) {
-        cameraZ = 5.0f;
-        firstLoad = false;
-    }
-
-    printf("Object Scale: %f, Camera Z: %f\n", objectScale, cameraZ);
-}
-
-// Calculate normals for the model
-void calculateNormals() {
-    // Clear existing normals
-    normals.clear();
-    normalIndices.clear();
-
-    // Create a normal for each vertex (initially zero)
-    for (size_t i = 0; i < vertices.size(); i++) {
-        Normal n = { 0.0f, 0.0f, 0.0f };
-        normals.push_back(n);
-    }
-
-    // For each face, calculate its normal and add it to the vertices
-    for (size_t i = 0; i < faces.size(); i++) {
-        // Get the three vertices of this face
-        const Vertex& v1 = vertices[faces[i].vertexIndices[0]];
-        const Vertex& v2 = vertices[faces[i].vertexIndices[1]];
-        const Vertex& v3 = vertices[faces[i].vertexIndices[2]];
-
-        // Calculate two edges of the triangle
-        float edge1x = v2.x - v1.x;
-        float edge1y = v2.y - v1.y;
-        float edge1z = v2.z - v1.z;
-
-        float edge2x = v3.x - v1.x;
-        float edge2y = v3.y - v1.y;
-        float edge2z = v3.z - v1.z;
-
-        // Calculate the cross product
-        float normalX = edge1y * edge2z - edge1z * edge2y;
-        float normalY = edge1z * edge2x - edge1x * edge2z;
-        float normalZ = edge1x * edge2y - edge1y * edge2x;
-
-        // Normalize the result
-        float length = sqrt(normalX * normalX + normalY * normalY + normalZ * normalZ);
-        if (length > 0.0001f) {
-            normalX /= length;
-            normalY /= length;
-            normalZ /= length;
-        }
-
-        // Add this normal to each vertex of the face
-        normals[faces[i].vertexIndices[0]].x += normalX;
-        normals[faces[i].vertexIndices[0]].y += normalY;
-        normals[faces[i].vertexIndices[0]].z += normalZ;
-
-        normals[faces[i].vertexIndices[1]].x += normalX;
-        normals[faces[i].vertexIndices[1]].y += normalY;
-        normals[faces[i].vertexIndices[1]].z += normalZ;
-
-        normals[faces[i].vertexIndices[2]].x += normalX;
-        normals[faces[i].vertexIndices[2]].y += normalY;
-        normals[faces[i].vertexIndices[2]].z += normalZ;
-    }
-
-    // Normalize all the vertex normals
-    for (size_t i = 0; i < normals.size(); i++) {
-        float length = sqrt(normals[i].x * normals[i].x +
-                           normals[i].y * normals[i].y +
-                           normals[i].z * normals[i].z);
-        if (length > 0.0001f) {
-            normals[i].x /= length;
-            normals[i].y /= length;
-            normals[i].z /= length;
-        }
-    }
-
-    printf("Calculated %zu normals\n", normals.size());
-}
-
-// Load an OBJ file
-void loadObjFile(const char* filename) {
-    // Clear current data
+// loadObj, calculateBoundingBox, setupInitialCamera, loadAndSetupObject, drawAxes
+// (No changes needed in these core logic functions from previous step)
+// (Make sure error handling in loadAndSetupObject is appropriate)
+bool loadObj(const std::string& filename) {
     vertices.clear();
-    normals.clear();
     faces.clear();
+    modelMin = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
+    modelMax = { std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest() };
+    modelCenter = { 0.0f, 0.0f, 0.0f };
+    modelSize = 1.0f;
 
-    // Try to open the file
     std::ifstream file(filename);
     if (!file.is_open()) {
-        printf("Failed to open file: %s\n", filename);
-        return;
+        std::cerr << "Error: Could not open file '" << filename << "'" << std::endl;
+        return false;
     }
 
-    printf("Loading OBJ file: %s\n", filename);
-
+    std::cout << "Loading OBJ file: " << filename << std::endl;
     std::string line;
+    std::vector<Vec3f> temp_vertices;
+
     while (std::getline(file, line)) {
-        std::istringstream iss(line);
-        std::string token;
-        iss >> token;
+        line.erase(0, line.find_first_not_of(" \t\n\r"));
+        line.erase(line.find_last_not_of(" \t\n\r") + 1);
+        if (line.empty() || line[0] == '#') continue;
 
-        if (token == "v") {
-            // Vertex
-            Vertex v;
-            iss >> v.x >> v.y >> v.z;
-            vertices.push_back(v);
-        } else if (token == "vn") {
-            // Normal
-            Normal n;
-            iss >> n.x >> n.y >> n.z;
-            normals.push_back(n);
-        } else if (token == "f") {
-            // Face - supporting triangular faces only for simplicity
+        std::stringstream ss(line);
+        std::string type;
+        ss >> type;
+
+        if (type == "v") {
+            Vec3f v;
+            if (ss >> v.x >> v.y >> v.z) { temp_vertices.push_back(v); }
+            else { std::cerr << "Warning: Malformed vertex line: " << line << std::endl; }
+        } else if (type == "f") {
             Face f;
-            std::string vertexStr;
-            int vertexIndex = 0;
-
-            // Parse face definition, which could be in various formats:
-            // f v1 v2 v3                 (vertex indices only)
-            // f v1/vt1 v2/vt2 v3/vt3     (vertex/texture indices)
-            // f v1/vt1/vn1 v2/vt2/vn2 v3/vt3/vn3 (vertex/texture/normal indices)
-            while (iss >> vertexStr && vertexIndex < 3) {
-                std::istringstream viss(vertexStr);
-                std::string indexStr;
-
-                // Get vertex index
-                std::getline(viss, indexStr, '/');
-                if (!indexStr.empty()) {
-                    // OBJ indices are 1-based, so subtract 1
-                    f.vertexIndices[vertexIndex] = std::stoi(indexStr) - 1;
+            std::string faceVertex;
+            while (ss >> faceVertex) {
+                std::stringstream face_ss(faceVertex);
+                std::string segment;
+                int vIndex = 0;
+                if (std::getline(face_ss, segment, '/')) {
+                     try {
+                        if (!segment.empty()) {
+                             vIndex = std::stoi(segment);
+                             if (vIndex > 0) { // Absolute index
+                                 if (static_cast<size_t>(vIndex) <= temp_vertices.size()) { f.vertexIndices.push_back(vIndex); }
+                                 else { std::cerr << "Warning: Vertex index " << vIndex << " out of range (max: " << temp_vertices.size() << ") in face: " << line << std::endl; }
+                             } else if (vIndex < 0) { // Relative index
+                                 int absIndex = temp_vertices.size() + vIndex + 1;
+                                 if (absIndex > 0 && static_cast<size_t>(absIndex) <= temp_vertices.size()) { f.vertexIndices.push_back(absIndex); }
+                                 else { std::cerr << "Warning: Relative vertex index " << vIndex << " out of range in face: " << line << std::endl; }
+                             } else { // vIndex == 0
+                                  std::cerr << "Warning: Vertex index 0 is invalid in face: " << line << std::endl;
+                             }
+                         }
+                     } catch (const std::invalid_argument& ia) { std::cerr << "Warning: Invalid vertex index format '" << segment << "' in face: " << line << std::endl; }
+                     catch (const std::out_of_range& oor) { std::cerr << "Warning: Vertex index out of range '" << segment << "' in face: " << line << std::endl; }
+                     catch (...) { std::cerr << "Warning: Unknown error parsing face component '" << segment << "' in face: " << line << std::endl; }
                 }
-
-                vertexIndex++;
             }
-
-            faces.push_back(f);
+             if (f.vertexIndices.size() >= 3) { faces.push_back(f); }
+             else if (!f.vertexIndices.empty()) { std::cerr << "Warning: Face with < 3 vertices ignored: " << line << std::endl; }
         }
     }
-
     file.close();
+    vertices = temp_vertices;
 
-    printf("Loaded %zu vertices and %zu faces\n", vertices.size(), faces.size());
+    if (vertices.empty()) { std::cerr << "Error: No vertices loaded from " << filename << std::endl; return false; }
+    if (faces.empty()) { std::cerr << "Warning: No faces loaded from " << filename << ". Will render vertices if mode allows." << std::endl; }
 
-    // Calculate vertex normals if none were loaded
-    if (normals.empty()) {
-        calculateNormals();
+    std::cout << "Loaded " << vertices.size() << " vertices and " << faces.size() << " faces." << std::endl;
+    calculateBoundingBox();
+    return true;
+}
+
+void calculateBoundingBox() {
+    if (vertices.empty()) {
+        modelCenter = {0.0f, 0.0f, 0.0f}; modelSize = 1.0f;
+        std::cout << "No vertices to calculate bounding box." << std::endl; return;
+    }
+    modelMin = vertices[0]; modelMax = vertices[0];
+    for(size_t i = 1; i < vertices.size(); ++i) {
+        modelMin.x = std::min(modelMin.x, vertices[i].x); modelMin.y = std::min(modelMin.y, vertices[i].y); modelMin.z = std::min(modelMin.z, vertices[i].z);
+        modelMax.x = std::max(modelMax.x, vertices[i].x); modelMax.y = std::max(modelMax.y, vertices[i].y); modelMax.z = std::max(modelMax.z, vertices[i].z);
     }
 
-    // Calculate bounding box and fit to screen
-    fitObjectToScreen();
+    modelCenter.x = (modelMin.x + modelMax.x) / 2.0f; modelCenter.y = (modelMin.y + modelMax.y) / 2.0f; modelCenter.z = (modelMin.z + modelMax.z) / 2.0f;
+    float dx = modelMax.x - modelMin.x; float dy = modelMax.y - modelMin.y; float dz = modelMax.z - modelMin.z;
+    modelSize = std::max({dx, dy, dz});
+    if (modelSize < 1e-6f) { modelSize = 1.0f; std::cout << "Warning: Model has zero size, defaulting size to 1.0." << std::endl; }
 
-    // Special handling for teapot.obj - make it bigger and ensure it's centered
-    std::string filenameStr(filename);
-    if (filenameStr.find("teapot.obj") != std::string::npos) {
-        objectScale = 0.0125f;
+    std::cout << "Bounding Box Min: (" << modelMin.x << ", " << modelMin.y << ", " << modelMin.z << ")" << std::endl;
+    std::cout << "Bounding Box Max: (" << modelMax.x << ", " << modelMax.y << ", " << modelMax.z << ")" << std::endl;
+    std::cout << "Model Center: (" << modelCenter.x << ", " << modelCenter.y << ", " << modelCenter.z << ")" << std::endl;
+    std::cout << "Model Max Dimension (Size): " << modelSize << std::endl;
+}
+
+void setupInitialCamera() {
+    float halfSize = modelSize / 2.0f;
+    float angleRad = fovY * 0.5f * (M_PI / 180.0f);
+    float distance = 1.0f;
+    if (angleRad > 1e-6f) { distance = halfSize / std::tan(angleRad); }
+    else { distance = halfSize * 10.0f; }
+    distance *= 1.8f;
+    distance = std::max(distance, modelSize * 0.5f);
+
+    cameraPos.x = modelCenter.x; cameraPos.y = modelCenter.y + halfSize * 0.2f; cameraPos.z = modelCenter.z + distance;
+    lookAtPos = modelCenter;
+    upVector = { 0.0f, 1.0f, 0.0f };
+
+    zNear = std::max(0.01f * modelSize, distance - modelSize * 1.5f);
+    zFar = distance + modelSize * 3.0f;
+    if (zNear >= zFar) { zFar = zNear + modelSize * 3.0f; }
+
+    std::cout << "Initial Camera Pos: (" << cameraPos.x << ", " << cameraPos.y << ", " << cameraPos.z << ")" << std::endl;
+    std::cout << "Look At: (" << lookAtPos.x << ", " << lookAtPos.y << ", " << lookAtPos.z << ")" << std::endl;
+    std::cout << "Clipping Planes: Near=" << zNear << ", Far=" << zFar << std::endl;
+}
+
+void resetView() {
+    translateX = 0.0f; translateY = 0.0f; translateZ = 0.0f;
+    rotateX = 0.0f; rotateY = 0.0f; rotateZ = 0.0f;
+    keyStates.clear();
+
+    if (!vertices.empty()) { setupInitialCamera(); }
+    else {
+        cameraPos = { 0.0f, 0.0f, 5.0f }; lookAtPos = { 0.0f, 0.0f, 0.0f }; upVector = { 0.0f, 1.0f, 0.0f };
+        zNear = 0.1f; zFar = 100.0f;
+        modelCenter = {0.0f, 0.0f, 0.0f}; modelSize = 1.0f;
     }
-
-    transX = 0.0f;
-    transY = 0.0f;
-    transZ = 0.0f;
-
-    // Set a standard viewing angle
-    rotX = 30.0f;  // X angle 30 degrees
-    rotY = 30.0f;  // Y angle 30 degrees
-    rotZ = 0.0f;
-
-    // Trigger a redisplay
     glutPostRedisplay();
 }
 
-// Display function
+void loadAndSetupObject(const std::string& filename) {
+    auto old_vertices = vertices; auto old_faces = faces; auto old_min = modelMin; auto old_max = modelMax;
+    auto old_center = modelCenter; auto old_size = modelSize; auto old_path = currentFilePath;
+
+    if (loadObj(filename)) {
+        currentFilePath = filename;
+        std::string title = "OBJ Viewer: " + filename.substr(filename.find_last_of("/\\") + 1);
+        glutSetWindowTitle(title.c_str());
+        resetView();
+    } else {
+         std::cerr << "Load failed. Restoring previous object state (if any)." << std::endl;
+        vertices = old_vertices; faces = old_faces; modelMin = old_min; modelMax = old_max;
+        modelCenter = old_center; modelSize = old_size; currentFilePath = old_path;
+        if (!currentFilePath.empty()) {
+            std::string title = "OBJ Viewer: " + currentFilePath.substr(currentFilePath.find_last_of("/\\") + 1) + " (Load Failed)";
+             glutSetWindowTitle(title.c_str());
+        } else { glutSetWindowTitle("OBJ Viewer: Load Failed"); }
+        glutPostRedisplay();
+    }
+}
+
+void drawAxes(float length) {
+    glPushAttrib(GL_LINE_BIT | GL_ENABLE_BIT | GL_CURRENT_BIT);
+    glDisable(GL_LIGHTING); glDisable(GL_TEXTURE_2D);
+    glLineWidth(2.5f);
+
+    glBegin(GL_LINES);
+    glColor3f(1.0f, 0.1f, 0.1f); glVertex3f(0.0f, 0.0f, 0.0f); glVertex3f(length, 0.0f, 0.0f); // X Red
+    glColor3f(0.1f, 1.0f, 0.1f); glVertex3f(0.0f, 0.0f, 0.0f); glVertex3f(0.0f, length, 0.0f); // Y Green
+    glColor3f(0.1f, 0.1f, 1.0f); glVertex3f(0.0f, 0.0f, 0.0f); glVertex3f(0.0f, 0.0f, length); // Z Blue
+    glEnd();
+
+    glPopAttrib();
+}
+
 void display() {
+    glClearColor(0.15f, 0.15f, 0.15f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
+    glMatrixMode(GL_PROJECTION); glLoadIdentity();
+    int currentHeight = (windowHeight == 0) ? 1 : windowHeight;
+    gluPerspective(fovY, (float)windowWidth / (float)currentHeight, zNear, zFar);
 
-    // Set up the camera
-    gluLookAt(cameraX, cameraY, cameraZ,  // Camera position
-              lookAtX, lookAtY, lookAtZ,  // Look at point
-              0.0f, 1.0f, 0.0f);          // Up vector
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    gluLookAt(cameraPos.x, cameraPos.y, cameraPos.z, lookAtPos.x, lookAtPos.y, lookAtPos.z, upVector.x, upVector.y, upVector.z);
 
-    // Apply transformations
-    glTranslatef(transX, transY, transZ);
-    glScalef(objectScale, objectScale, objectScale);
-    glRotatef(rotX, 1.0f, 0.0f, 0.0f);
-    glRotatef(rotY, 0.0f, 1.0f, 0.0f);
-    glRotatef(rotZ, 0.0f, 0.0f, 1.0f);
+    float axisLength = modelSize * 1.5f;
+    drawAxes(axisLength);
 
-    // Ensure lighting is disabled for all render modes
-    glDisable(GL_LIGHTING);
+    glTranslatef(translateX, translateY, translateZ);
+    glTranslatef(modelCenter.x, modelCenter.y, modelCenter.z);
+    glRotatef(rotateX, 1.0f, 0.0f, 0.0f);
+    glRotatef(rotateY, 0.0f, 1.0f, 0.0f);
+    glRotatef(rotateZ, 0.0f, 0.0f, 1.0f);
+    glTranslatef(-modelCenter.x, -modelCenter.y, -modelCenter.z);
 
-    // Render the object based on the render mode
-    switch (renderMode) {
-        case POINT_MODE:
-            glPointSize(3.0f);
-            glBegin(GL_POINTS);
-            for (size_t i = 0; i < vertices.size(); i++) {
-                if (colorMode == RANDOM_COLORS) {
-                    glColor3f((float)rand()/RAND_MAX, (float)rand()/RAND_MAX, (float)rand()/RAND_MAX);
-                } else {
-                    glColor3f(1.0f, 1.0f, 1.0f);  // Single color: white
-                }
-                glVertex3f(vertices[i].x, vertices[i].y, vertices[i].z);
-            }
-            glEnd();
-            break;
-
-        case LINE_MODE:
-            glBegin(GL_LINES);
-            for (size_t i = 0; i < faces.size(); i++) {
-                if (colorMode == RANDOM_COLORS) {
-                    glColor3f((float)rand()/RAND_MAX, (float)rand()/RAND_MAX, (float)rand()/RAND_MAX);
-                } else {
-                    glColor3f(1.0f, 1.0f, 1.0f);  // Single color: white
-                }
-
-                // Draw edges of the face
-                const Vertex& v1 = vertices[faces[i].vertexIndices[0]];
-                const Vertex& v2 = vertices[faces[i].vertexIndices[1]];
-                const Vertex& v3 = vertices[faces[i].vertexIndices[2]];
-
-                glVertex3f(v1.x, v1.y, v1.z);
-                glVertex3f(v2.x, v2.y, v2.z);
-
-                glVertex3f(v2.x, v2.y, v2.z);
-                glVertex3f(v3.x, v3.y, v3.z);
-
-                glVertex3f(v3.x, v3.y, v3.z);
-                glVertex3f(v1.x, v1.y, v1.z);
-            }
-            glEnd();
-            break;
-
-        case FACE_MODE:
-            // Modified FACE_MODE to not use lighting
-            glBegin(GL_TRIANGLES);
-            for (size_t i = 0; i < faces.size(); i++) {
-                // Set color based on color mode
-                if (colorMode == RANDOM_COLORS) {
-                    glColor3f((float)rand()/RAND_MAX, (float)rand()/RAND_MAX, (float)rand()/RAND_MAX);
-                } else {
-                    // Use a brown color similar to the original material color
-                    glColor3f(0.7f, 0.5f, 0.3f);
-                }
-
-                // Get vertices for this face
-                const Vertex& v1 = vertices[faces[i].vertexIndices[0]];
-                const Vertex& v2 = vertices[faces[i].vertexIndices[1]];
-                const Vertex& v3 = vertices[faces[i].vertexIndices[2]];
-
-                // Draw the triangular face without normals (no lighting)
-                glVertex3f(v1.x, v1.y, v1.z);
-                glVertex3f(v2.x, v2.y, v2.z);
-                glVertex3f(v3.x, v3.y, v3.z);
-            }
-            glEnd();
-            break;
+    switch (currentRenderMode) {
+        case POINT: glPolygonMode(GL_FRONT_AND_BACK, GL_POINT); glPointSize(3.0f); glDisable(GL_LIGHTING); break;
+        case LINE: glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); glLineWidth(1.5f); glDisable(GL_LIGHTING); break;
+        case FACE: default: glPolygonMode(GL_FRONT_AND_BACK, GL_FILL); break; /* glEnable(GL_LIGHTING); */
     }
+
+    if (!vertices.empty()) {
+        if (currentColorMode == SINGLE) { glColor3f(0.9f, 0.9f, 0.9f); }
+        if (!faces.empty()) {
+            for (const auto& face : faces) {
+                if (currentColorMode == RANDOM) { glColor3f((float)rand()/RAND_MAX*0.8f+0.2f, (float)rand()/RAND_MAX*0.8f+0.2f, (float)rand()/RAND_MAX*0.8f+0.2f); }
+                glBegin(GL_POLYGON);
+                for (int index : face.vertexIndices) {
+                    if (index > 0 && static_cast<size_t>(index) <= vertices.size()) {
+                        const Vec3f& v = vertices[index - 1]; glVertex3f(v.x, v.y, v.z);
+                    }
+                }
+                glEnd();
+            }
+        } else if (currentRenderMode == POINT || currentRenderMode == LINE) {
+             glBegin(GL_POINTS);
+             for(size_t i = 0; i < vertices.size(); ++i) {
+                 if (currentColorMode == RANDOM) { glColor3f((float)rand()/RAND_MAX*0.8f+0.2f, (float)rand()/RAND_MAX*0.8f+0.2f, (float)rand()/RAND_MAX*0.8f+0.2f); }
+                 const Vec3f& v = vertices[i]; glVertex3f(v.x, v.y, v.z);
+             }
+             glEnd();
+         }
+    }
+
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL); glPointSize(1.0f); glLineWidth(1.0f);
+    /* glDisable(GL_LIGHTING); */
 
     glutSwapBuffers();
 }
 
-// Reshape function to handle window resizing
-void reshape(int width, int height) {
-    windowWidth = width;
-    windowHeight = height;
-
-    glViewport(0, 0, width, height);
-
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(45.0f, (float)width / (float)height, 0.1f, 1000.0f);
+void reshape(int w, int h) {
+    windowWidth = w; windowHeight = h;
+    if (windowHeight == 0) windowHeight = 1;
+    glViewport(0, 0, windowWidth, windowHeight);
+    glutPostRedisplay();
 }
 
-// Keyboard function to handle key presses
 void keyboard(unsigned char key, int x, int y) {
-    const float rotationSpeed = 5.0f;
-    const float translationSpeed = 0.1f;
-    const float cameraSpeed = 0.5f;
+    key = std::tolower(key); // Use std::tolower from <cctype>
+    keyStates[key] = true;
 
-    switch(key) {
-        // Object rotation
-        case 'x': rotX += rotationSpeed; break;
-        case 'X': rotX -= rotationSpeed; break;
-        case 'y': rotY += rotationSpeed; break;
-        case 'Y': rotY -= rotationSpeed; break;
-        case 'z': rotZ += rotationSpeed; break;
-        case 'Z': rotZ -= rotationSpeed; break;
-
-        // Object translation
-        case 'a': transX -= translationSpeed; break;
-        case 'd': transX += translationSpeed; break;
-        case 'w': transY += translationSpeed; break;
-        case 's': transY -= translationSpeed; break;
-        case 'q': transZ -= translationSpeed; break;
-        case 'e': transZ += translationSpeed; break;
-
-        // Camera movement
-        case 'i': cameraY += cameraSpeed; lookAtY += cameraSpeed; break;
-        case 'k': cameraY -= cameraSpeed; lookAtY -= cameraSpeed; break;
-        case 'j': cameraX -= cameraSpeed; lookAtX -= cameraSpeed; break;
-        case 'l': cameraX += cameraSpeed; lookAtX += cameraSpeed; break;
-        case 'u': cameraZ -= cameraSpeed; break;
-        case 'o': cameraZ += cameraSpeed; break;
-
-        // Reset
+    switch (key) {
         case 'r':
-            rotX = rotY = rotZ = 0.0f;
-            transX = transY = transZ = 0.0f;
-            cameraX = cameraY = 0.0f;
-            cameraZ = 5.0f;
-            lookAtX = lookAtY = lookAtZ = 0.0f;
-            fitObjectToScreen();
+             if (glutGetModifiers() & GLUT_ACTIVE_SHIFT) {
+                 resetView();
+                 keyStates['r'] = false; // Release state after single press action
+             }
             break;
-
-        // Exit
-        case 27:  // ESC key
+        case 27: // ESC
+            std::cout << "ESC pressed. Exiting." << std::endl;
             exit(0);
             break;
     }
-
-    glutPostRedisplay();
 }
 
-// Special key function to handle arrow keys etc.
-void specialKeys(int key, int x, int y) {
-    const float lookSpeed = 0.1f;
+void keyboardUp(unsigned char key, int x, int y) {
+    key = std::tolower(key);
+    keyStates[key] = false;
+}
 
-    switch(key) {
-        case GLUT_KEY_UP:
-            lookAtY += lookSpeed;
-            break;
-        case GLUT_KEY_DOWN:
-            lookAtY -= lookSpeed;
-            break;
-        case GLUT_KEY_LEFT:
-            lookAtX -= lookSpeed;
-            break;
-        case GLUT_KEY_RIGHT:
-            lookAtX += lookSpeed;
-            break;
+void update() {
+    bool changed = false;
+    float moveAmount = 0.01f * modelSize;
+    float camAmount = moveAmount;
+    float rotAmount = 1.0f;
+
+    // Object Translation
+    if (keyStates['w']) { translateY += moveAmount; changed = true; }
+    if (keyStates['s']) { translateY -= moveAmount; changed = true; }
+    if (keyStates['a']) { translateX -= moveAmount; changed = true; }
+    if (keyStates['d']) { translateX += moveAmount; changed = true; }
+    if (keyStates['q']) { translateZ += moveAmount; changed = true; }
+    if (keyStates['e']) { translateZ -= moveAmount; changed = true; }
+
+    // --- Object Rotation (NEW MAPPING) ---
+    // X-Axis: R/F
+    if (keyStates['r'] && !(glutGetModifiers() & GLUT_ACTIVE_SHIFT)) { rotateX += rotAmount; changed = true; }
+    if (keyStates['f']) { rotateX -= rotAmount; changed = true; }
+    // Y-Axis: T/G (Changed from Z/C)
+    if (keyStates['t']) { rotateY += rotAmount; changed = true; }
+    if (keyStates['g']) { rotateY -= rotAmount; changed = true; }
+    // Z-Axis: Y/H (Changed from T/G)
+    if (keyStates['y']) { rotateZ += rotAmount; changed = true; }
+    if (keyStates['h']) { rotateZ -= rotAmount; changed = true; }
+
+
+    // Camera Movement
+    if (keyStates['i']) { cameraPos.z -= camAmount; lookAtPos.z -= camAmount; changed = true; }
+    if (keyStates['k']) { cameraPos.z += camAmount; lookAtPos.z += camAmount; changed = true; }
+    if (keyStates['j']) { cameraPos.x -= camAmount; lookAtPos.x -= camAmount; changed = true; }
+    if (keyStates['l']) { cameraPos.x += camAmount; lookAtPos.x += camAmount; changed = true; }
+    if (keyStates['u']) { cameraPos.y += camAmount; lookAtPos.y += camAmount; changed = true; }
+    if (keyStates['o']) { cameraPos.y -= camAmount; lookAtPos.y -= camAmount; changed = true; }
+
+    if (changed) {
+        glutPostRedisplay();
     }
-
-    glutPostRedisplay();
 }
 
-// Menu callback function
-void menuCallback(int value) {
-    if (value >= 100 && value < 100 + objFiles.size()) {
-        // File selection
-        int fileIndex = value - 100;
-        loadObjFile(objFiles[fileIndex].c_str());
-    } else if (value >= 200 && value < 203) {
-        // Render mode selection
-        renderMode = (RenderMode)(value - 200);
-        printf("Render mode set to: %d\n", renderMode);
-    } else if (value >= 300 && value < 302) {
-        // Color mode selection
-        colorMode = (ColorMode)(value - 300);
-        printf("Color mode set to: %d\n", colorMode);
-    } else if (value == 999) {
-        // Load a file through command line input
-        char filename[256];
-        printf("Enter the OBJ file path: ");
-        scanf("%255s", filename);
-        loadObjFile(filename);
-    }
-
-    glutPostRedisplay();
+void mouse(int button, int state, int x, int y) {
+     if (button == GLUT_RIGHT_BUTTON && state == GLUT_DOWN) { } // Menu handled by GLUT
 }
 
-// Create the popup menus
+// createMenus, processMainMenu, processFileMenu, processRenderMenu, processColorMenu
+// (No changes needed in menu logic itself, only menu item text)
 void createMenus() {
-    // File submenu
-    int fileMenu = glutCreateMenu(menuCallback);
-    for (size_t i = 0; i < objFiles.size(); i++) {
-        glutAddMenuEntry(objFiles[i].c_str(), 100 + i);
-    }
-    glutAddMenuEntry("Load from command line", 999);
+    int fileMenu = glutCreateMenu(processFileMenu);
+    // Get base filename for menu display
+    auto getBaseName = [](const std::string& path) {
+        size_t lastSlash = path.find_last_of("/\\");
+        return (lastSlash == std::string::npos) ? path : path.substr(lastSlash + 1);
+    };
+    glutAddMenuEntry(("1: " + getBaseName(file1Path)).c_str(), MENU_FILE_1);
+    glutAddMenuEntry(("2: " + getBaseName(file2Path)).c_str(), MENU_FILE_2);
+    glutAddMenuEntry(("3: " + getBaseName(file3Path)).c_str(), MENU_FILE_3);
+    glutAddMenuEntry(("4: " + getBaseName(file4Path)).c_str(), MENU_FILE_4);
+    glutAddMenuEntry("Load Other from Console...", MENU_FILE_LOAD);
 
-    // Render mode submenu
-    int renderMenu = glutCreateMenu(menuCallback);
-    glutAddMenuEntry("Point Mode", 200 + POINT_MODE);
-    glutAddMenuEntry("Line Mode", 200 + LINE_MODE);
-    glutAddMenuEntry("Face Mode", 200 + FACE_MODE);
+    int renderMenu = glutCreateMenu(processRenderMenu);
+    glutAddMenuEntry("Point Mode", MENU_RENDER_POINT);
+    glutAddMenuEntry("Line Mode", MENU_RENDER_LINE);
+    glutAddMenuEntry("Face Mode", MENU_RENDER_FACE);
 
-    // Color mode submenu
-    int colorMenu = glutCreateMenu(menuCallback);
-    glutAddMenuEntry("Single Color", 300 + SINGLE_COLOR);
-    glutAddMenuEntry("Random Colors", 300 + RANDOM_COLORS);
+    int colorMenu = glutCreateMenu(processColorMenu);
+    glutAddMenuEntry("Single Color (White)", MENU_COLOR_SINGLE);
+    glutAddMenuEntry("Random Color (Per Face/Vertex)", MENU_COLOR_RANDOM);
 
-    // Main menu
-    int mainMenu = glutCreateMenu(menuCallback);
-    glutAddSubMenu("Select OBJ File", fileMenu);
+    glutCreateMenu(processMainMenu);
+    glutAddSubMenu("Load OBJ File", fileMenu);
     glutAddSubMenu("Render Mode", renderMenu);
     glutAddSubMenu("Color Mode", colorMenu);
+    glutAddMenuEntry("Reset View (Shift+R)", MENU_RESET_VIEW);
+    glutAddMenuEntry("Quit (ESC)", MENU_QUIT);
 
-    // Attach the menu to the right mouse button
     glutAttachMenu(GLUT_RIGHT_BUTTON);
 }
 
-// Main function
-int main(int argc, char** argv) {
-    // Initialize GLUT
-    glutInit(&argc, argv);
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
-    glutInitWindowSize(windowWidth, windowHeight);
-    glutCreateWindow("OBJ File Viewer");
+void processMainMenu(int option) {
+     switch (option) {
+        case MENU_RESET_VIEW: resetView(); break;
+        case MENU_QUIT: std::cout << "Quit selected from menu. Exiting." << std::endl; exit(0); break;
+    }
+}
 
-    // Register callback functions
+void processFileMenu(int option) {
+    std::string filename;
+    bool needsInput = false;
+    switch (option) {
+        case MENU_FILE_1: filename = file1Path; break;
+        case MENU_FILE_2: filename = file2Path; break;
+        case MENU_FILE_3: filename = file3Path; break;
+        case MENU_FILE_4: filename = file4Path; break;
+        case MENU_FILE_LOAD: needsInput = true; break;
+        default: return;
+    }
+
+    if (needsInput) {
+        std::cout << "\n--- Load OBJ File ---" << std::endl;
+        std::cout << "Enter path (e.g., Models/my_model.obj or C:/...) and press Enter:" << std::endl;
+        std::cout << "Path: ";
+        std::getline(std::cin >> std::ws, filename);
+        if (std::cin.fail() || filename.empty()) {
+             std::cerr << "Error reading filename or filename empty." << std::endl;
+             std::cin.clear(); std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); return;
+        }
+         std::cout << "Attempting to load: '" << filename << "'" << std::endl;
+         loadAndSetupObject(filename);
+    } else if (!filename.empty()) {
+       loadAndSetupObject(filename);
+    }
+}
+
+void processRenderMenu(int option) {
+    switch (option) {
+        case MENU_RENDER_POINT: currentRenderMode = POINT; break;
+        case MENU_RENDER_LINE:  currentRenderMode = LINE; break;
+        case MENU_RENDER_FACE:  currentRenderMode = FACE; break;
+    }
+    glutPostRedisplay();
+}
+
+void processColorMenu(int option) {
+    switch (option) {
+        case MENU_COLOR_SINGLE: currentColorMode = SINGLE; break;
+        case MENU_COLOR_RANDOM:
+            currentColorMode = RANDOM; std::srand(static_cast<unsigned int>(std::time(nullptr))); break;
+    }
+    glutPostRedisplay();
+}
+
+
+int main(int argc, char** argv) {
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
+    glutInitWindowSize(windowWidth, windowHeight);
+    glutInitWindowPosition(100, 100);
+    glutCreateWindow("OBJ Viewer Assignment");
+
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+    // Register Callbacks
     glutDisplayFunc(display);
     glutReshapeFunc(reshape);
     glutKeyboardFunc(keyboard);
-    glutSpecialFunc(specialKeys);
+    glutKeyboardUpFunc(keyboardUp);
+    glutIdleFunc(update);
+    glutMouseFunc(mouse);
 
-    // Initialize our application
-    init();
+    // OpenGL Init
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_NORMALIZE);
 
-    // Start the main loop
+    // Load Initial Object
+    std::string initialFile = file1Path; // Default uses Models/ path now
+    if (argc > 1) {
+        initialFile = argv[1];
+        std::cout << "Loading object from command line argument: " << initialFile << std::endl;
+    } else {
+        std::cout << "No command line argument provided." << std::endl;
+        std::cout << "Attempting to load default object: " << initialFile << std::endl;
+        std::cout << "(Place OBJ files in a 'Models' subdirectory or provide full path)" << std::endl;
+
+    }
+    loadAndSetupObject(initialFile);
+
+    // Create Menus
+    createMenus();
+
+    // Print Controls (UPDATED)
+    std::cout << "\n--- Controls (Hold keys for smooth movement) ---" << std::endl;
+    std::cout << "Right Click: Show Menu" << std::endl;
+    std::cout << "W/S/A/D/Q/E: Translate Object (Y+/Y-/X-/X+/Z+/Z-)" << std::endl;
+    std::cout << "R/F: Rotate Object X-axis (+/-)" << std::endl;
+    std::cout << "T/G: Rotate Object Y-axis (+/-)  <-- UPDATED" << std::endl;
+    std::cout << "Y/H: Rotate Object Z-axis (+/-)  <-- UPDATED" << std::endl;
+    std::cout << "I/K/J/L/U/O: Move Camera (Fwd/Back/Left/Right/Up/Down)" << std::endl;
+    std::cout << "Shift+R: Reset View (Single Press)" << std::endl;
+    std::cout << "ESC: Quit (Single Press)" << std::endl;
+    std::cout << "--------------------------------------------------\n" << std::endl;
+
+
     glutMainLoop();
 
     return 0;
