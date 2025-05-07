@@ -3,6 +3,7 @@
 #include <vector>
 #include <cmath>
 #include <algorithm> // For std::min, std::max
+#include <string>    // For std::string, std::to_string
 
 // --- Configuration ---
 const int NUM_ENDPOINTS = 3; // Changed to 3 for triangle
@@ -10,6 +11,7 @@ int gridDimension = 10;      // Grid range for endpoint selection (-10 to 10)
 int cellSize = 15;           // Pixel size of each grid cell (affects visual size)
 int windowWidth = 800;       // Initial window width
 int windowHeight = 800;      // Initial window height
+const unsigned int ANIMATION_DELAY = 10; // Milliseconds between animation steps
 
 // --- Data Structures ---
 struct Cell {
@@ -30,33 +32,39 @@ std::vector<Line> lines;          // Stores the 3 triangle edge lines
 std::vector<Cell> triangleFillPixels; // Stores pixels inside the triangle
 bool endpointsSelected = false;   // Flag indicating if all 3 endpoints are selected
 
+// --- Animation State ---
+bool isAnimatingFill = false;
+int currentFillX, currentFillY;
+int minFillX, maxFillX, minFillY, maxFillY; // Bounding box for current animation
+Cell animV1, animV2, animV3; // Vertices for the triangle being animated
+float animOrientationSign;   // Orientation sign for the triangle being animated
+
+
 // --- Function Prototypes ---
 void display();
 void reshape(int w, int h);
 void mouse(int button, int state, int x, int y);
 void keyboard(unsigned char key, int x, int y);
-void createMenu(); // Keep menu for grid dimension/range selection
+void createMenu();
 void menuCallback(int option);
-void drawFaintGrid(); // Draw a faint grid only for selection aid
-void drawCell(int x, int y, bool isE, bool isNE); // Modified drawCell for outline
-void drawFilledCell(int x, int y, float r, float g, float b); // Simple cell fill
+void drawFaintGrid();
+void drawCell(int x, int y, bool isE, bool isNE);
+void drawFilledCell(int x, int y, float r, float g, float b);
 void convertScreenToGrid(int screenX, int screenY, int& gridX, int& gridY);
-void drawLines();                             // Draws triangle outline
-void drawMidpointLine(Line& line);            // Midpoint algorithm implementation
-void fillTriangle(const Cell& v1, const Cell& v2, const Cell& v3); // Triangle fill function
-void clearAll();                              // Helper to clear selections
+void drawLines();
+void drawMidpointLine(Line& line);
+// void fillTriangle(const Cell& v1, const Cell& v2, const Cell& v3); // Will be replaced by animation logic
+void startFillAnimation(const Cell& v1, const Cell& v2, const Cell& v3);
+void animateFillStep(int value);
+void clearAll();
+float cross_product_sign(const Cell& p1, const Cell& p2, const Cell& p3);
 
 // Helper function for triangle filling (half-plane check)
-// Returns positive if p3 is to the left of vector p1->p2, negative if to the right, 0 if collinear.
-// Note: Y-axis is inverted in screen coordinates, but grid coordinates are Cartesian.
-// This function uses Cartesian coordinates.
 float cross_product_sign(const Cell& p1, const Cell& p2, const Cell& p3) {
-    // (x2 - x1)*(y3 - y1) - (y2 - y1)*(x3 - x1)
     long long val = 1LL * (p2.x - p1.x) * (p3.y - p1.y) - 1LL * (p2.y - p1.y) * (p3.x - p1.x);
      if (val == 0) return 0.0f;
      return (val > 0) ? 1.0f : -1.0f;
 }
-
 
 // --- Main Function ---
 int main(int argc, char** argv) {
@@ -64,71 +72,49 @@ int main(int argc, char** argv) {
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
     glutInitWindowSize(windowWidth, windowHeight);
     glutInitWindowPosition(100, 100);
-    glutCreateWindow("Triangle Fill (Midpoint Outline)");
+    glutCreateWindow("Animated Triangle Fill (Midpoint Outline)");
 
     glutDisplayFunc(display);
     glutReshapeFunc(reshape);
     glutMouseFunc(mouse);
     glutKeyboardFunc(keyboard);
 
-    createMenu(); // Keep menu for grid dimension selection
+    createMenu();
 
-    // Set background to black - Requirement 6
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-
     glutMainLoop();
     return 0;
 }
+
 // --- Display Callback ---
-// Modified to always draw the faint grid
 void display() {
-    // Clear with black background - Requirement 6
     glClear(GL_COLOR_BUFFER_BIT);
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    // Set projection (origin bottom-left)
     gluOrtho2D(0, windowWidth, 0, windowHeight);
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
-    // --- MODIFICATION START ---
-    // Always draw faint grid first as background aid
     drawFaintGrid();
-    // --- MODIFICATION END ---
 
-
-    // Draw triangle fill and outline only if endpoints are selected
-    if (endpointsSelected) {
-        // 1. Draw Fill (Light Gray) - Requirement 5
-        // Drawn ON TOP of the faint grid now
+    if (endpointsSelected || isAnimatingFill) { // Draw fill if fully selected OR if animating
         for (const auto& cell : triangleFillPixels) {
             drawFilledCell(cell.x, cell.y, 0.7f, 0.7f, 0.7f); // Light gray
         }
-
-        // 2. Draw Outline (Green/Blue/White) - Requirement 3 & 4
-        // Drawn ON TOP of the fill and faint grid
-        drawLines(); // Calls drawCell for outline pixels
+        drawLines(); // Outline
     }
 
-    // 3. Draw Endpoints (Red) - Draw on top of everything else
-    // Check if the endpoint has been selected (currentEndpoint > i)
-    // or if all points are selected
+
     for (int i = 0; i < NUM_ENDPOINTS; ++i) {
         if (currentEndpoint > i || endpointsSelected) {
-            // Red color for endpoint marker
-            drawFilledCell(endpoints[i].x, endpoints[i].y, 1.0f, 0.0f, 0.0f);
-
-            // Draw label (v1, v2, v3) - White text
+            drawFilledCell(endpoints[i].x, endpoints[i].y, 1.0f, 0.0f, 0.0f); // Red
             glColor3f(1.0f, 1.0f, 1.0f);
             int centerX = windowWidth / 2;
             int centerY = windowHeight / 2;
-            // Calculate pixel coords for the label based on cell coords
-             int cellPixelX = centerX + endpoints[i].x * cellSize - cellSize / 2;
-             int cellPixelY = centerY + endpoints[i].y * cellSize - cellSize / 2; // Use '+' for Y due to gluOrtho2D
-
-            // Position text slightly inside the cell
+            int cellPixelX = centerX + endpoints[i].x * cellSize - cellSize / 2;
+            int cellPixelY = centerY + endpoints[i].y * cellSize - cellSize / 2;
             glRasterPos2i(cellPixelX + cellSize / 4, cellPixelY + cellSize / 4);
             std::string label = "v" + std::to_string(i + 1);
             for (char c : label) {
@@ -136,33 +122,34 @@ void display() {
             }
         }
     }
-
-    glutSwapBuffers(); // Display the completed frame
+    glutSwapBuffers();
 }
+
 // --- Reshape Callback ---
 void reshape(int w, int h) {
     windowWidth = w;
     windowHeight = h;
-    glViewport(0, 0, w, h); // Use the full window
-    // Projection matrix is reset in display()
+    glViewport(0, 0, w, h);
 }
 
 // --- Mouse Callback ---
 void mouse(int button, int state, int x, int y) {
     if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
+        if (isAnimatingFill) {
+            std::cout << "Animation in progress. Please wait or press 'C' to clear." << std::endl;
+            return;
+        }
+
         int gridX, gridY;
-        // Adjust y coordinate because OpenGL's origin is bottom-left,
-        // but mouse events usually have origin top-left.
         convertScreenToGrid(x, windowHeight - 1 - y, gridX, gridY);
 
-        // Check if click is within the selectable grid range
         if (gridX >= -gridDimension && gridX <= gridDimension &&
             gridY >= -gridDimension && gridY <= gridDimension) {
 
             if (currentEndpoint < NUM_ENDPOINTS) {
                 endpoints[currentEndpoint].x = gridX;
                 endpoints[currentEndpoint].y = gridY;
-                endpoints[currentEndpoint].isE = false; // Initialize flags
+                endpoints[currentEndpoint].isE = false;
                 endpoints[currentEndpoint].isNE = false;
 
                 std::cout << "Endpoint v" << (currentEndpoint + 1) << " selected at: ("
@@ -170,22 +157,19 @@ void mouse(int button, int state, int x, int y) {
                 currentEndpoint++;
 
                 if (currentEndpoint == NUM_ENDPOINTS) {
-                    endpointsSelected = true;
+                    endpointsSelected = true; // Mark as selected for outline drawing
                     lines.clear();
-                    triangleFillPixels.clear();
+                    triangleFillPixels.clear(); // Clear previous fill
 
-                    // Create Line structures for triangle edges
-                    lines.resize(NUM_ENDPOINTS); // Ensure vector has space
+                    lines.resize(NUM_ENDPOINTS);
                     for(int i=0; i < NUM_ENDPOINTS; ++i) {
                         lines[i].start = endpoints[i];
-                        lines[i].end = endpoints[(i + 1) % NUM_ENDPOINTS]; // Connect to next, wrap around
-                        drawMidpointLine(lines[i]); // Calculate pixels for the outline
+                        lines[i].end = endpoints[(i + 1) % NUM_ENDPOINTS];
+                        drawMidpointLine(lines[i]); // Calculate outline immediately
                     }
-
-                    // Calculate fill pixels
-                    fillTriangle(endpoints[0], endpoints[1], endpoints[2]);
-
-                    std::cout << "Triangle defined. Outline and fill calculated." << std::endl;
+                    // Start animation for filling
+                    startFillAnimation(endpoints[0], endpoints[1], endpoints[2]);
+                    std::cout << "Triangle outline defined. Starting fill animation..." << std::endl;
                     std::cout << "Press 'C' to clear and select new points." << std::endl;
                 }
             } else {
@@ -201,12 +185,12 @@ void mouse(int button, int state, int x, int y) {
 // --- Keyboard Callback ---
 void keyboard(unsigned char key, int x, int y) {
     switch (key) {
-        case 'c': // Clear all selections
+        case 'c':
         case 'C':
-        case 'r': // Reset - make same as clear for simplicity
+        case 'r':
         case 'R':
             clearAll();
-            std::cout << "Cleared all points and fill. Select 3 new endpoints." << std::endl;
+            std::cout << "Cleared all points, fill, and stopped animation. Select 3 new endpoints." << std::endl;
             break;
         case 27: // Escape key
              exit(0);
@@ -221,7 +205,12 @@ void clearAll() {
     endpointsSelected = false;
     lines.clear();
     triangleFillPixels.clear();
-    // No need to reset endpoint coordinates, they will be overwritten
+
+    // Stop and reset animation
+    isAnimatingFill = false;
+    // No need to explicitly call glutTimerFunc to cancel,
+    // the check 'if(isAnimatingFill)' in animateFillStep will stop it.
+    std::cout << "Animation stopped and cleared." << std::endl;
 }
 
 // --- Menu Creation ---
@@ -239,27 +228,21 @@ void menuCallback(int option) {
         gridDimension = option;
         std::cout << "Grid selection range set to: " << gridDimension << "x" << gridDimension
                   << " (" << -gridDimension << " to " << gridDimension << ")" << std::endl;
-        clearAll(); // Clear everything if grid range changes
+        clearAll();
         glutPostRedisplay();
     }
 }
 
-// --- Faint Grid Drawing --- (For selection aid)
+// --- Faint Grid Drawing ---
 void drawFaintGrid() {
     int centerX = windowWidth / 2;
     int centerY = windowHeight / 2;
-
-    // Calculate pixel boundaries based on centered grid
-    // Use window coords directly now due to gluOrtho2D
     int minPixelX = centerX - (gridDimension * cellSize) - (cellSize / 2);
     int maxPixelX = centerX + (gridDimension * cellSize) + (cellSize / 2);
     int minPixelY = centerY - (gridDimension * cellSize) - (cellSize / 2);
     int maxPixelY = centerY + (gridDimension * cellSize) + (cellSize / 2);
 
-
-    glColor3f(0.15f, 0.15f, 0.15f); // Very faint gray for lines
-
-    // Draw vertical grid lines
+    glColor3f(0.15f, 0.15f, 0.15f);
     for (int i = -gridDimension; i <= gridDimension + 1; i++) {
         int x = centerX + i * cellSize - cellSize / 2;
         glBegin(GL_LINES);
@@ -267,21 +250,16 @@ void drawFaintGrid() {
         glVertex2i(x, maxPixelY);
         glEnd();
     }
-
-    // Draw horizontal grid lines
     for (int i = -gridDimension; i <= gridDimension + 1; i++) {
-        int y = centerY + i * cellSize - cellSize / 2; // Use '+' for Y due to gluOrtho2D
+        int y = centerY + i * cellSize - cellSize / 2;
         glBegin(GL_LINES);
         glVertex2i(minPixelX, y);
         glVertex2i(maxPixelX, y);
         glEnd();
     }
-
-    // Optional: Draw faint axes or origin marker
     int originCellX = centerX - cellSize / 2;
     int originCellY = centerY - cellSize / 2;
-    glColor3f(0.3f, 0.3f, 0.3f); // Slightly less faint for origin/axes
-    // Draw cross at origin cell
+    glColor3f(0.3f, 0.3f, 0.3f);
     glBegin(GL_LINES);
     glVertex2i(originCellX, originCellY + cellSize / 2);
     glVertex2i(originCellX + cellSize, originCellY + cellSize / 2);
@@ -290,62 +268,45 @@ void drawFaintGrid() {
     glEnd();
 }
 
-
 // --- Simple Filled Cell Drawing ---
 void drawFilledCell(int x, int y, float r, float g, float b) {
     int centerX = windowWidth / 2;
     int centerY = windowHeight / 2;
-    // Calculate bottom-left corner pixel coordinates for the cell
     int cellX = centerX + x * cellSize - cellSize / 2;
-    int cellY = centerY + y * cellSize - cellSize / 2; // Use '+' for Y due to gluOrtho2D
+    int cellY = centerY + y * cellSize - cellSize / 2;
 
     glColor3f(r, g, b);
     glBegin(GL_QUADS);
-    glVertex2i(cellX, cellY);                // Bottom-left
-    glVertex2i(cellX + cellSize, cellY);     // Bottom-right
-    glVertex2i(cellX + cellSize, cellY + cellSize); // Top-right
-    glVertex2i(cellX, cellY + cellSize);     // Top-left
+    glVertex2i(cellX, cellY);
+    glVertex2i(cellX + cellSize, cellY);
+    glVertex2i(cellX + cellSize, cellY + cellSize);
+    glVertex2i(cellX, cellY + cellSize);
     glEnd();
 }
 
 // --- Outline Cell Drawing ---
-// Draws a single cell for the outline with specific colors based on Midpoint move
 void drawCell(int x, int y, bool isE, bool isNE) {
     float r, g, b;
-    if (isE) {
-        r = 0.0f; g = 1.0f; b = 0.0f; // Green for E - Requirement 4
-    } else if (isNE) {
-        r = 0.0f; g = 0.0f; b = 1.0f; // Blue for NE - Requirement 4
-    } else {
-        r = 1.0f; g = 1.0f; b = 1.0f; // White for starting pixel
-    }
-    // Use the helper function to draw the cell with the determined color
+    if (isE) { r = 0.0f; g = 1.0f; b = 0.0f; } // Green
+    else if (isNE) { r = 0.0f; g = 0.0f; b = 1.0f; } // Blue
+    else { r = 1.0f; g = 1.0f; b = 1.0f; } // White
     drawFilledCell(x, y, r, g, b);
 }
 
-
 // --- Coordinate Conversion ---
-// Converts window pixel coordinates (x, y - origin bottom-left) to grid coordinates
 void convertScreenToGrid(int screenX, int screenY, int& gridX, int& gridY) {
     int centerX = windowWidth / 2;
     int centerY = windowHeight / 2;
-
-    // Calculate distance from center in pixels
     float pixelDx = (float)(screenX - centerX);
     float pixelDy = (float)(screenY - centerY);
-
-    // Convert pixel distance to grid coordinates (divide by cell size)
-    // Round to nearest integer grid coordinate
     gridX = static_cast<int>(std::floor(pixelDx / cellSize + 0.5f));
     gridY = static_cast<int>(std::floor(pixelDy / cellSize + 0.5f));
 }
 
 // --- Draw Lines --- (Outline)
-// Calls drawCell for each pixel calculated by Midpoint algorithm
 void drawLines() {
     for (const auto& line : lines) {
         if (!line.pixels.empty()) {
-            // Draw each pixel using its stored E/NE flags to determine color
             for (const auto& pixel : line.pixels) {
                  drawCell(pixel.x, pixel.y, pixel.isE, pixel.isNE);
             }
@@ -353,132 +314,123 @@ void drawLines() {
     }
 }
 
-// --- Midpoint Line Algorithm --- (For Outline)
-// Calculates pixels for a line segment and stores them in the Line object
-void drawMidpointLine(Line& currentLine) { // Pass by reference to modify pixels vector
-    currentLine.pixels.clear(); // Ensure pixels are clear before calculating
-
+// --- Midpoint Line Algorithm ---
+void drawMidpointLine(Line& currentLine) {
+    currentLine.pixels.clear();
     int x0 = currentLine.start.x;
     int y0 = currentLine.start.y;
     int x1 = currentLine.end.x;
     int y1 = currentLine.end.y;
 
-    // Use flags for transformation to handle all octants
     bool steep = abs(y1 - y0) > abs(x1 - x0);
     bool swapXY = steep;
 
-    if (steep) {
-        std::swap(x0, y0);
-        std::swap(x1, y1);
-    }
-
-    if (x0 > x1) {
-        std::swap(x0, x1);
-        std::swap(y0, y1);
-         // Also swap start/end in the original line struct if needed? No, Midpoint logic handles direction.
-    }
+    if (steep) { std::swap(x0, y0); std::swap(x1, y1); }
+    if (x0 > x1) { std::swap(x0, x1); std::swap(y0, y1); }
 
     int dx = x1 - x0;
     int dy = abs(y1 - y0);
-    int signY = (y0 < y1) ? 1 : -1; // Direction of Y increment
-
-    int d = 2 * dy - dx;       // Initial decision parameter
-    int delE = 2 * dy;         // Increment if E is chosen
-    int delNE = 2 * (dy - dx); // Increment if NE is chosen
-
-    int x = x0; // Start at the (potentially transformed) left point
+    int signY = (y0 < y1) ? 1 : -1;
+    int d = 2 * dy - dx;
+    int delE = 2 * dy;
+    int delNE = 2 * (dy - dx);
+    int x = x0;
     int y = y0;
 
-    // Lambda to add pixels, reversing transformation
     auto addPixel = [&](int plot_x, int plot_y, bool isE, bool isNE) {
         int original_x = swapXY ? plot_y : plot_x;
         int original_y = swapXY ? plot_x : plot_y;
-        // The start pixel is marked isE=false, isNE=false
         currentLine.pixels.push_back({original_x, original_y, isE, isNE});
     };
 
-    // Add the first point
     addPixel(x, y, false, false);
-
-    // Loop through x from first point to last in the transformed coordinate system
     while (x < x1) {
-        bool movedE = false;
-        bool movedNE = false;
-        if (d <= 0) { // Choose E (East)
-            d += delE;
-            x++;
-            // y remains the same
-            movedE = true;
-        } else { // Choose NE (Northeast)
-            d += delNE;
-            x++;
-            y += signY; // Increment y in the correct direction
-            movedNE = true;
-        }
-        // Add the new point with flags indicating the move made
+        bool movedE = false; bool movedNE = false;
+        if (d <= 0) { d += delE; x++; movedE = true; }
+        else { d += delNE; x++; y += signY; movedNE = true; }
         addPixel(x, y, movedE, movedNE);
     }
 }
 
-// --- Triangle Fill --- (Using Bounding Box + Half-Plane Check)
-void fillTriangle(const Cell& v1, const Cell& v2, const Cell& v3) {
-    triangleFillPixels.clear();
+// --- Triangle Fill Animation ---
+void startFillAnimation(const Cell& v1, const Cell& v2, const Cell& v3) {
+    if (isAnimatingFill) return; // Don't start a new one if one is running
 
-    // 1. Find bounding box of the triangle in grid coordinates
-    int minX = std::min({v1.x, v2.x, v3.x});
-    int maxX = std::max({v1.x, v2.x, v3.x});
-    int minY = std::min({v1.y, v2.y, v3.y});
-    int maxY = std::max({v1.y, v2.y, v3.y});
+    triangleFillPixels.clear(); // Clear any previous fill pixels
 
-    // Optional: Clamp bounding box to overall grid dimensions if necessary
-    minX = std::max(minX, -gridDimension);
-    maxX = std::min(maxX, gridDimension);
-    minY = std::max(minY, -gridDimension);
-    maxY = std::min(maxY, gridDimension);
+    animV1 = v1; animV2 = v2; animV3 = v3;
 
-    // 2. Determine a consistent orientation (e.g., sign for CCW)
-    // Calculate sign for one edge relative to the third vertex.
-    float orientation_sign = cross_product_sign(v1, v2, v3);
+    minFillX = std::min({v1.x, v2.x, v3.x});
+    maxFillX = std::max({v1.x, v2.x, v3.x});
+    minFillY = std::min({v1.y, v2.y, v3.y});
+    maxFillY = std::max({v1.y, v2.y, v3.y});
 
-    // If orientation_sign is 0, the points are collinear, no area to fill.
-    if (orientation_sign == 0.0f) {
-        std::cout << "Vertices are collinear, no triangle area to fill." << std::endl;
-        return; // No fill for degenerate triangle
+    minFillX = std::max(minFillX, -gridDimension);
+    maxFillX = std::min(maxFillX, gridDimension);
+    minFillY = std::max(minFillY, -gridDimension);
+    maxFillY = std::min(maxFillY, gridDimension);
+
+    animOrientationSign = cross_product_sign(v1, v2, v3);
+
+    if (animOrientationSign == 0.0f) {
+        std::cout << "Vertices are collinear, no animation needed." << std::endl;
+        endpointsSelected = true; // Still mark as fully selected for outline
+        isAnimatingFill = false;
+        glutPostRedisplay();
+        return;
     }
 
-    // 3. Iterate through each grid cell within the bounding box
-    for (int y = minY; y <= maxY; ++y) {
-        for (int x = minX; x <= maxX; ++x) {
-            Cell p = {x, y, false, false}; // Current grid cell center (using integer coords)
+    // Start scanning from top-left of bounding box
+    // "Top" means higher Y in grid coordinates.
+    currentFillY = maxFillY;
+    currentFillX = minFillX;
+    isAnimatingFill = true;
 
-            // Calculate the cross product sign for the point 'p' relative to each edge
-            // Ensure edges are checked in a consistent order (e.g., v1->v2, v2->v3, v3->v1)
-            float d12 = cross_product_sign(v1, v2, p);
-            float d23 = cross_product_sign(v2, v3, p);
-            float d31 = cross_product_sign(v3, v1, p);
+    std::cout << "Starting animation: Y from " << maxFillY << " down to " << minFillY
+              << ", X from " << minFillX << " to " << maxFillX << std::endl;
 
-            // Check if the point 'p' is on the same side of all edges (or on the edge).
-            // The check depends on the triangle's orientation (CW or CCW).
-            // If orientation_sign > 0 (CCW), then d12, d23, d31 should all be >= 0.
-            // If orientation_sign < 0 (CW), then d12, d23, d31 should all be <= 0.
+    glutTimerFunc(ANIMATION_DELAY, animateFillStep, 0); // Start the animation loop
+}
 
-            bool inside = false;
-            if (orientation_sign > 0) { // Assuming CCW
-                if (d12 >= 0 && d23 >= 0 && d31 >= 0) {
-                    inside = true;
-                }
-            } else { // Assuming CW
-                if (d12 <= 0 && d23 <= 0 && d31 <= 0) {
-                    inside = true;
-                }
-            }
-
-
-            if (inside) {
-                // Add cell to fill list (don't need isE/isNE for fill)
-                 triangleFillPixels.push_back({x, y, false, false});
-            }
-        }
+void animateFillStep(int value) {
+    if (!isAnimatingFill) { // Animation might have been cancelled
+        endpointsSelected = true; // Ensure it's marked as done for any final draw states
+        glutPostRedisplay();
+        return;
     }
-    std::cout << "Fill calculation complete. Added " << triangleFillPixels.size() << " pixels." << std::endl;
+
+    // Process one cell
+    Cell p = {currentFillX, currentFillY, false, false};
+    float d12 = cross_product_sign(animV1, animV2, p);
+    float d23 = cross_product_sign(animV2, animV3, p);
+    float d31 = cross_product_sign(animV3, animV1, p);
+
+    bool inside = false;
+    if (animOrientationSign > 0) { // CCW
+        if (d12 >= 0 && d23 >= 0 && d31 >= 0) inside = true;
+    } else { // CW
+        if (d12 <= 0 && d23 <= 0 && d31 <= 0) inside = true;
+    }
+
+    if (inside) {
+        triangleFillPixels.push_back(p);
+    }
+
+    // Move to next cell in "top to bottom, left to right" order
+    currentFillX++;
+    if (currentFillX > maxFillX) {
+        currentFillX = minFillX; // Reset X
+        currentFillY--;          // Move to next row down
+    }
+
+    glutPostRedisplay(); // Redraw the scene
+
+    // Check if animation is complete
+    if (currentFillY < minFillY) {
+        isAnimatingFill = false;
+        endpointsSelected = true; // Final state: fully selected
+        std::cout << "Fill animation complete. Added " << triangleFillPixels.size() << " pixels." << std::endl;
+    } else {
+        glutTimerFunc(ANIMATION_DELAY, animateFillStep, 0); // Continue animation
+    }
 }

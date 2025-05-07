@@ -1,50 +1,33 @@
-# OpenGL OBJ Viewer
+# 動畫三角形填充程式 (中點法外框)
 
-## Overview
+這是一個使用 C++ 和 OpenGL (FreeGLUT) 實現的互動式程式。它允許使用者在二維網格上選擇三個點來定義一個三角形。程式會使用中點演算法繪製三角形的外框，並以動畫方式從上到下、從左到右掃描並填充三角形的內部。
 
-This is a simple 3D object viewer written in C++ using OpenGL and the FreeGLUT library. It allows users to load and view Wavefront OBJ (`.obj`) model files, interactively manipulate the object and camera, and change rendering styles.
+## 功能特性
 
-## Features
+* **頂點選擇**: 使用者可以透過滑鼠左鍵在預設的網格範圍內點擊選擇三角形的三個頂點。
+* **網格輔助**: 提供一個淡淡的網格作為背景，輔助使用者選擇頂點。
+* **中點演算法外框**: 三角形的外框線條是使用中點演算法生成的。
+  * 外框線條的像素根據中點演算法的移動方向進行著色：
+    * **綠色**: 代表選擇 "E" (East) 移動。
+    * **藍色**: 代表選擇 "NE" (Northeast) 移動。
+    * **白色**: 代表線條的起始點。
+* **三角形填充**: 使用邊界框和半平面檢測（叉積符號判斷）的方法來確定哪些網格單元格位於三角形內部。
+* **動畫式填充**: 三角形的填充過程是動畫的，網格單元格會按照從上到下、從左到右的順序被逐漸填充。
+* **動態網格範圍**: 使用者可以透過滑鼠右鍵選單更改網格的維度（例如，從 -10 到 10，或 -15 到 15 等）。
+* **視覺回饋**:
+  * 選擇的頂點會以**紅色**方塊標示，並標有 "v1", "v2", "v3"。
+  * 三角形內部填充為**淺灰色**。
+  * 程式背景為**黑色**。
+* **清除與重置**: 使用者可以按 'C' 或 'R' 鍵清除當前選擇的頂點和已繪製的三角形，以便重新開始。
+* **結束程式**: 按 'Esc' 鍵可以退出程式。
 
-* **OBJ Model Loading:** Loads 3D models from `.obj` files (supports vertex `v` and face `f` tags).
-* **Multiple Rendering Modes:**
-  * **Point Mode:** Renders only the vertices of the model.
-  * **Line Mode (Wireframe):** Renders the edges of the model's faces.
-  * **Face Mode (Solid):** Renders filled polygons for the model's faces (default).
-* **Color Modes:**
-  * **Single Color:** Renders the entire model in a default white color.
-  * **Random Color:** Assigns a random color to each face (in Face mode) or vertex (in Point mode when no faces are loaded).
-* **Interactive Transformations:**
-  * **Object Translation:** Move the object along the X, Y, and Z axes.
-  * **Object Rotation:** Rotate the object around the X, Y, and Z axes.
-* **Camera Controls:** Move the camera forward/backward, left/right, and up/down.
-* **Automatic Centering and Scaling:** Automatically calculates the model's bounding box and adjusts the initial camera view to fit the loaded model.
-* **Coordinate Axes:** Displays reference X (Red), Y (Green), and Z (Blue) axes for orientation.
-* **Smooth Movement:** Uses key state tracking for continuous transformations while keys are held down.
-* **Right-Click Menu:** Provides easy access to:
-  * Load predefined or custom OBJ files.
-  * Switch between rendering modes.
-  * Switch between color modes.
-  * Reset the view (object position/rotation and camera).
-  * Quit the application.
-* **Command-Line Loading:** Optionally load an OBJ file specified as a command-line argument.
-* **Default File Loading:** Attempts to load a default file (`Models/gourd.obj`) if no command-line argument is given.
+## 需求
 
-## Dependencies
+* C++ 編譯器 (例如 G++)
+* FreeGLUT (或相容的 GLUT) 開發函式庫
+* OpenGL 函式庫
 
-To compile and run this application, you need:
-
-1.  **A C++ Compiler:** A modern C++ compiler (supporting C++11 or later features like `auto`, `<limits>`, etc.). Examples: GCC (g++), Clang, MSVC.
-2.  **OpenGL Libraries:** Typically installed with your graphics drivers.
-3.  **FreeGLUT:** The Free OpenGL Utility Toolkit library for windowing and input handling.
-  * **Linux (Debian/Ubuntu):** `sudo apt-get update && sudo apt-get install build-essential freeglut3-dev`
-  * **Linux (Fedora):** `sudo dnf install gcc-c++ freeglut-devel`
-  * **macOS (using Homebrew):** `brew install freeglut`
-  * **Windows:** Download pre-compiled binaries (check the FreeGLUT website or use a package manager like vcpkg). Ensure `freeglut.dll` is accessible at runtime, and link against `freeglut.lib`.
-
-## Building
-
-The specific compilation command depends on your system and compiler. A typical command using g++ on Linux or macOS might look like this:
+## 編譯指令 (Linux/macOS 使用 G++)
 
 ```bash
-g++ your_source_file.cpp -o obj_viewer -lGL -lglut -lm
+g++ your_file_name.cpp -o triangle_filler -lGL -lglut -lGLU
