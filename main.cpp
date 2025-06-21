@@ -1,283 +1,362 @@
-#include <GL/freeglut.h>
-#include <cmath>
-#include <iostream>
-#include <vector>
-#include <cstring> // For memcpy
+// SphereWorld.cpp - Modified to include animated robot without external headers
+// OpenGL SuperBible example modified for robot animation
 
-// Defines for icosahedron vertices
-#define X .525731112119133606
-#define Z .850650808352039932
+#ifdef WIN32
+#include <windows.h>
+#endif
 
-// Icosahedron vertex data (12 vertices)
-static GLfloat vdata[12][3] = {
-    {-X, 0.0, Z}, {X, 0.0, Z}, {-X, 0.0, -Z}, {X, 0.0, -Z},
-    {0.0, Z, X}, {0.0, Z, -X}, {0.0, -Z, X}, {0.0, -Z, -X},
-    {Z, X, 0.0}, {-Z, X, 0.0}, {Z, -X, 0.0}, {-Z, -X, 0.0}
-};
+#include <GL/gl.h>
+#include <GL/glut.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-// Icosahedron triangle indices (20 triangles)
-static int tindices[20][3] = {
-    {0,4,1}, {0,9,4}, {9,5,4}, {4,5,8}, {4,8,1},
-    {8,10,1}, {8,3,10}, {5,3,8}, {5,2,3}, {2,7,3},
-    {7,10,3}, {7,6,10}, {7,11,6}, {11,0,6}, {0,1,6},
-    {6,1,10}, {9,0,11}, {9,11,2}, {9,2,5}, {7,2,11}
-};
+// Define our own types to replace math3d.h dependencies
+typedef float M3DVector3f[3];
+typedef float M3DVector4f[4];
+typedef float M3DMatrix44f[16];
 
-// Global state variables
-GLfloat rotX = 20.0f;
-GLfloat rotY = 30.0f;
-int subdivisionDepth = 2;
-GLenum polyMode = GL_FILL;
+// Constants
+#define M3D_PI 3.14159265358979323846f
+#define NUM_SPHERES 30
 
-// Window dimensions
-int windowWidth = 900;
-int windowHeight = 400;
+// Global variables
+M3DVector3f spheres[NUM_SPHERES];
+M3DVector3f cameraPos = {0.0f, 0.0f, 5.0f};
+float cameraRotY = 0.0f;
 
-// Lighting and material properties
-GLfloat light_pos[] = {2.0f, 3.0f, 4.0f, 1.0f};
-GLfloat light_ambient[] = {0.3f, 0.3f, 0.3f, 1.0f};
-GLfloat light_diffuse[] = {0.9f, 0.9f, 0.9f, 1.0f};
-GLfloat light_specular[] = {0.8f, 0.8f, 0.8f, 1.0f};
+// Light and material Data
+GLfloat fLightPos[4] = {-50.0f, 50.0f, 25.0f, 1.0f};
+GLfloat fNoLight[] = {0.0f, 0.0f, 0.0f, 0.0f};
+GLfloat fLowLight[] = {0.25f, 0.25f, 0.25f, 1.0f};
+GLfloat fBrightLight[] = {1.0f, 1.0f, 1.0f, 1.0f};
 
-GLfloat mat_ambient[] = {0.8f, 0.6f, 0.2f, 1.0f};
-GLfloat mat_diffuse[] = {0.8f, 0.6f, 0.2f, 1.0f};
-GLfloat mat_specular[] = {1.0f, 1.0f, 0.8f, 1.0f};
-GLfloat mat_shininess = 100.0f;
+M3DMatrix44f mShadowMatrix;
 
-// Display List IDs
-GLuint flatIcosahedronList;
-GLuint smoothIcosahedronList;
+// Texture objects
+#define GROUND_TEXTURE  0
+#define WOOD_TEXTURE    1
+#define SPHERE_TEXTURE  2
+#define NUM_TEXTURES    3
+GLuint textureObjects[NUM_TEXTURES];
 
-// --- Utility Functions --- (Identical)
-void normalize(GLfloat v[3]) {
-    GLfloat d = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-    if (d == 0.0f) { return; }
-    v[0] /= d; v[1] /= d; v[2] /= d;
+// Robot animation variables
+static GLfloat robotRotation = 0.0f;
+static GLfloat armSwing = 0.0f;
+static GLfloat legSwing = 0.0f;
+static int animationDirection = 1;
+static int animationPaused = 0;
+
+// Robot's base position (center of orbit for the circling sphere)
+M3DVector3f robotBasePosition = {0.0f, 0.48f, -2.5f}; // X, Y (actual robot base height), Z
+
+// Circling sphere variables
+M3DVector3f circlingSpherePos;
+const float circlingSphereObjectRadius = 0.3f; // Visual radius of the sphere
+const float circlingSphereOrbitRadius = 2.0f;   // Distance from robot's XZ center
+static float circlingSphereOrbitAngle = 0.0f;
+const float circlingSphereOrbitSpeed = 1.0f;    // Degrees per animation step
+// Y position for the center of the circling sphere to make it "float on ground"
+const float circlingSphereHeight = -0.4f + circlingSphereObjectRadius; // ground_Y + sphere_radius
+
+
+// Simple vector operations
+void m3dLoadVector3(M3DVector3f v, float x, float y, float z) {
+    v[0] = x; v[1] = y; v[2] = z;
 }
-void crossProduct(const GLfloat a[3], const GLfloat b[3], GLfloat result[3]) {
-    result[0] = a[1]*b[2] - a[2]*b[1];
-    result[1] = a[2]*b[0] - a[0]*b[2];
-    result[2] = a[0]*b[1] - a[1]*b[0];
-}
-void normCrossProd(const GLfloat v1[3], const GLfloat v2[3], GLfloat out[3]) {
-    crossProduct(v1, v2, out);
-    normalize(out);
+
+void m3dCopyVector3(M3DVector3f dst, const M3DVector3f src) {
+    dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2];
 }
 
-// --- Drawing Functions (Internal) --- (Identical)
-void setFaceNormalCalcFroMSlide(const GLfloat* v_t0, const GLfloat* v_t1, const GLfloat* v_t2) {
-    GLfloat d1[3], d2[3], n_vec[3];
-    for (int k = 0; k < 3; k++) { d1[k] = v_t0[k] - v_t1[k]; d2[k] = v_t1[k] - v_t2[k]; }
-    normCrossProd(d1, d2, n_vec); glNormal3fv(n_vec);
+void m3dCrossProduct(M3DVector3f result, const M3DVector3f u, const M3DVector3f v) {
+    result[0] = u[1]*v[2] - u[2]*v[1];
+    result[1] = u[2]*v[0] - u[0]*v[2];
+    result[2] = u[0]*v[1] - u[1]*v[0];
 }
-void drawIcosahedronFlatInternal() {
-    glBegin(GL_TRIANGLES);
-    for (int i = 0; i < 20; i++) {
-        const GLfloat* v0 = vdata[tindices[i][0]]; const GLfloat* v1 = vdata[tindices[i][1]]; const GLfloat* v2 = vdata[tindices[i][2]];
-        setFaceNormalCalcFroMSlide(v0, v1, v2);
-        glVertex3fv(v0); glVertex3fv(v1); glVertex3fv(v2);
+
+void m3dNormalizeVector(M3DVector3f u) {
+    float length = sqrt(u[0]*u[0] + u[1]*u[1] + u[2]*u[2]);
+    if (length > 0.00001f) {
+        u[0] /= length;
+        u[1] /= length;
+        u[2] /= length;
     }
+}
+
+void m3dGetPlaneEquation(M3DVector4f planeEq, const M3DVector3f p1, const M3DVector3f p2, const M3DVector3f p3) {
+    M3DVector3f v1, v2, vNormal;
+    v1[0] = p2[0] - p1[0]; v1[1] = p2[1] - p1[1]; v1[2] = p2[2] - p1[2];
+    v2[0] = p3[0] - p1[0]; v2[1] = p3[1] - p1[1]; v2[2] = p3[2] - p1[2];
+    m3dCrossProduct(vNormal, v1, v2);
+    m3dNormalizeVector(vNormal);
+    planeEq[0] = vNormal[0]; planeEq[1] = vNormal[1]; planeEq[2] = vNormal[2];
+    planeEq[3] = -(planeEq[0] * p1[0] + planeEq[1] * p1[1] + planeEq[2] * p1[2]);
+}
+
+void m3dMakePlanarShadowMatrix(M3DMatrix44f proj, const M3DVector4f planeEq, const M3DVector3f light_pos) {
+    float dot = planeEq[0] * light_pos[0] + planeEq[1] * light_pos[1] + planeEq[2] * light_pos[2] + planeEq[3];
+    proj[0]  = dot - light_pos[0] * planeEq[0]; proj[4]  = 0.0f - light_pos[0] * planeEq[1]; proj[8]  = 0.0f - light_pos[0] * planeEq[2]; proj[12] = 0.0f - light_pos[0] * planeEq[3];
+    proj[1]  = 0.0f - light_pos[1] * planeEq[0]; proj[5]  = dot - light_pos[1] * planeEq[1]; proj[9]  = 0.0f - light_pos[1] * planeEq[2]; proj[13] = 0.0f - light_pos[1] * planeEq[3];
+    proj[2]  = 0.0f - light_pos[2] * planeEq[0]; proj[6]  = 0.0f - light_pos[2] * planeEq[1]; proj[10] = dot - light_pos[2] * planeEq[2]; proj[14] = 0.0f - light_pos[2] * planeEq[3];
+    proj[3]  = 0.0f - 1.0f * planeEq[0];         proj[7]  = 0.0f - 1.0f * planeEq[1];         proj[11] = 0.0f - 1.0f * planeEq[2];         proj[15] = dot  - 1.0f * planeEq[3];
+}
+
+GLbyte* loadTGA(const char* filename, GLint* width, GLint* height, GLint* components, GLenum* format) {
+    FILE* file; unsigned char header[18]; unsigned char* imageData; int imageSize;
+    *components = 3; *format = GL_RGB;
+    file = fopen(filename, "rb");
+    if (!file) {
+        fprintf(stderr, "Cannot open TGA file %s. Using procedural texture.\n", filename);
+        *width = 64; *height = 64; imageSize = (*width) * (*height) * 3;
+        imageData = (unsigned char*)malloc(imageSize);
+        for (int i = 0; i < imageSize; i += 3) {
+            if (strcmp(filename, "grass.tga") == 0) { imageData[i] = 0; imageData[i+1] = 128; imageData[i+2] = 0; }
+            else if (strcmp(filename, "wood.tga") == 0) { imageData[i] = 139; imageData[i+1] = 69; imageData[i+2] = 19; }
+            else { imageData[i] = 255; imageData[i+1] = 100; imageData[i+2] = 0; }
+        }
+        return (GLbyte*)imageData;
+    }
+    fread(header, 1, 18, file); *width = header[12] + header[13] * 256; *height = header[14] + header[15] * 256;
+    imageSize = (*width) * (*height) * 3; imageData = (unsigned char*)malloc(imageSize);
+    fread(imageData, 1, imageSize, file); fclose(file);
+    for (int i = 0; i < imageSize; i += 3) { unsigned char temp = imageData[i]; imageData[i] = imageData[i+2]; imageData[i+2] = temp; }
+    return (GLbyte*)imageData;
+}
+
+void drawCube(float size) {
+    float half = size / 2.0f;
+    glBegin(GL_QUADS);
+    glNormal3f(0.0f, 0.0f, 1.0f); glTexCoord2f(0.0f, 0.0f); glVertex3f(-half, -half, half); glTexCoord2f(1.0f, 0.0f); glVertex3f(half, -half, half); glTexCoord2f(1.0f, 1.0f); glVertex3f(half, half, half); glTexCoord2f(0.0f, 1.0f); glVertex3f(-half, half, half);
+    glNormal3f(0.0f, 0.0f, -1.0f); glTexCoord2f(1.0f, 0.0f); glVertex3f(-half, -half, -half); glTexCoord2f(1.0f, 1.0f); glVertex3f(-half, half, -half); glTexCoord2f(0.0f, 1.0f); glVertex3f(half, half, -half); glTexCoord2f(0.0f, 0.0f); glVertex3f(half, -half, -half);
+    glNormal3f(0.0f, 1.0f, 0.0f); glTexCoord2f(0.0f, 1.0f); glVertex3f(-half, half, -half); glTexCoord2f(0.0f, 0.0f); glVertex3f(-half, half, half); glTexCoord2f(1.0f, 0.0f); glVertex3f(half, half, half); glTexCoord2f(1.0f, 1.0f); glVertex3f(half, half, -half);
+    glNormal3f(0.0f, -1.0f, 0.0f); glTexCoord2f(1.0f, 1.0f); glVertex3f(-half, -half, -half); glTexCoord2f(0.0f, 1.0f); glVertex3f(half, -half, -half); glTexCoord2f(0.0f, 0.0f); glVertex3f(half, -half, half); glTexCoord2f(1.0f, 0.0f); glVertex3f(-half, -half, half);
+    glNormal3f(1.0f, 0.0f, 0.0f); glTexCoord2f(1.0f, 0.0f); glVertex3f(half, -half, -half); glTexCoord2f(1.0f, 1.0f); glVertex3f(half, half, -half); glTexCoord2f(0.0f, 1.0f); glVertex3f(half, half, half); glTexCoord2f(0.0f, 0.0f); glVertex3f(half, -half, half);
+    glNormal3f(-1.0f, 0.0f, 0.0f); glTexCoord2f(0.0f, 0.0f); glVertex3f(-half, -half, -half); glTexCoord2f(1.0f, 0.0f); glVertex3f(-half, -half, half); glTexCoord2f(1.0f, 1.0f); glVertex3f(-half, half, half); glTexCoord2f(0.0f, 1.0f); glVertex3f(-half, half, -half);
     glEnd();
 }
-void drawIcosahedronSmoothInternal() {
-    glBegin(GL_TRIANGLES);
-    for (int i = 0; i < 20; i++) {
-        const GLfloat* v0_ptr = vdata[tindices[i][0]]; const GLfloat* v1_ptr = vdata[tindices[i][1]]; const GLfloat* v2_ptr = vdata[tindices[i][2]];
-        GLfloat n0[3], n1[3], n2[3];
-        memcpy(n0, v0_ptr, sizeof(GLfloat)*3); normalize(n0);
-        memcpy(n1, v1_ptr, sizeof(GLfloat)*3); normalize(n1);
-        memcpy(n2, v2_ptr, sizeof(GLfloat)*3); normalize(n2);
-        glNormal3fv(n0); glVertex3fv(v0_ptr); glNormal3fv(n1); glVertex3fv(v1_ptr); glNormal3fv(n2); glVertex3fv(v2_ptr);
+
+void drawSphere(float radius, int slices, int stacks) {
+    GLUquadricObj *pObj = gluNewQuadric();
+    gluQuadricNormals(pObj, GLU_SMOOTH); gluQuadricTexture(pObj, GL_TRUE);
+    gluSphere(pObj, radius, slices, stacks); gluDeleteQuadric(pObj);
+}
+
+void drawRobot(int isShadow) {
+    if (!isShadow) { glBindTexture(GL_TEXTURE_2D, textureObjects[WOOD_TEXTURE]); glColor3f(1.0f, 1.0f, 1.0f); }
+    glPushMatrix(); glScalef(0.8f, 1.2f, 0.6f); drawCube(1.0f); glPopMatrix(); // Torso
+    glPushMatrix(); glTranslatef(0.0f, 0.9f, 0.0f); glScalef(0.6f, 0.6f, 0.6f); drawCube(1.0f); glPopMatrix(); // Head
+    glPushMatrix(); glTranslatef(-0.6f, 0.4f, 0.0f); glRotatef(armSwing, 1.0f, 0.0f, 0.0f); // Left Arm
+        glPushMatrix(); glTranslatef(0.0f, -0.3f, 0.0f); glScalef(0.3f, 0.6f, 0.3f); drawCube(1.0f); glPopMatrix(); // Upper
+        glPushMatrix(); glTranslatef(0.0f, -0.6f, 0.0f); glRotatef(armSwing * 0.5f, 1.0f, 0.0f, 0.0f); glTranslatef(0.0f, -0.3f, 0.0f); glScalef(0.25f, 0.6f, 0.25f); drawCube(1.0f); glPopMatrix(); // Lower
+    glPopMatrix();
+    glPushMatrix(); glTranslatef(0.6f, 0.4f, 0.0f); glRotatef(-armSwing, 1.0f, 0.0f, 0.0f); // Right Arm
+        glPushMatrix(); glTranslatef(0.0f, -0.3f, 0.0f); glScalef(0.3f, 0.6f, 0.3f); drawCube(1.0f); glPopMatrix(); // Upper
+        glPushMatrix(); glTranslatef(0.0f, -0.6f, 0.0f); glRotatef(-armSwing * 0.5f, 1.0f, 0.0f, 0.0f); glTranslatef(0.0f, -0.3f, 0.0f); glScalef(0.25f, 0.6f, 0.25f); drawCube(1.0f); glPopMatrix(); // Lower
+    glPopMatrix();
+    glPushMatrix(); glTranslatef(-0.3f, -0.8f, 0.0f); glRotatef(-legSwing, 1.0f, 0.0f, 0.0f); // Left Leg
+        glPushMatrix(); glTranslatef(0.0f, -0.4f, 0.0f); glScalef(0.3f, 0.6f, 0.3f); drawCube(1.0f); glPopMatrix(); // Upper
+        glPushMatrix(); glTranslatef(0.0f, -0.8f, 0.0f); glRotatef(-legSwing * 0.3f, 1.0f, 0.0f, 0.0f); glTranslatef(0.0f, -0.3f, 0.0f); glScalef(0.25f, 0.6f, 0.25f); drawCube(1.0f); glPopMatrix(); // Lower
+    glPopMatrix();
+    glPushMatrix(); glTranslatef(0.3f, -0.8f, 0.0f); glRotatef(legSwing, 1.0f, 0.0f, 0.0f); // Right Leg
+        glPushMatrix(); glTranslatef(0.0f, -0.4f, 0.0f); glScalef(0.3f, 0.6f, 0.3f); drawCube(1.0f); glPopMatrix(); // Upper
+        glPushMatrix(); glTranslatef(0.0f, -0.8f, 0.0f); glRotatef(legSwing * 0.3f, 1.0f, 0.0f, 0.0f); glTranslatef(0.0f, -0.3f, 0.0f); glScalef(0.25f, 0.6f, 0.25f); drawCube(1.0f); glPopMatrix(); // Lower
+    glPopMatrix();
+}
+
+void SetupRC() {
+    M3DVector3f vPoints[3] = {{0.0f, -0.4f, 0.0f}, {10.0f, -0.4f, 0.0f}, {5.0f, -0.4f, -5.0f}};
+    int i;
+    glClearColor(fLowLight[0], fLowLight[1], fLowLight[2], fLowLight[3]);
+    glClearStencil(0);
+    glStencilFunc(GL_EQUAL, 0, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+    glCullFace(GL_BACK); glFrontFace(GL_CCW); glEnable(GL_CULL_FACE); glEnable(GL_DEPTH_TEST);
+    glLightModelfv(GL_LIGHT_MODEL_AMBIENT, fNoLight);
+    glLightfv(GL_LIGHT0, GL_AMBIENT, fLowLight); glLightfv(GL_LIGHT0, GL_DIFFUSE, fBrightLight);
+    glLightfv(GL_LIGHT0, GL_SPECULAR, fBrightLight); glEnable(GL_LIGHTING); glEnable(GL_LIGHT0);
+    M3DVector4f pPlane; m3dGetPlaneEquation(pPlane, vPoints[0], vPoints[1], vPoints[2]);
+    M3DVector3f lightPos3f; m3dCopyVector3(lightPos3f, fLightPos);
+    m3dMakePlanarShadowMatrix(mShadowMatrix, pPlane, lightPos3f);
+    glEnable(GL_COLOR_MATERIAL); glColorMaterial(GL_FRONT, GL_AMBIENT_AND_DIFFUSE);
+    glMaterialfv(GL_FRONT, GL_SPECULAR, fBrightLight); glMateriali(GL_FRONT, GL_SHININESS, 128);
+
+    for (i = 0; i < NUM_SPHERES; i++) {
+        spheres[i][0] = ((float)((rand() % 400) - 200) * 0.1f);
+        spheres[i][1] = -0.1f; // Ground Y (-0.4) + sphere radius (0.3)
+        spheres[i][2] = ((float)((rand() % 400) - 200) * 0.1f);
     }
-    glEnd();
-}
-void drawTriangleRecursiveSmooth(const GLfloat v1[3], const GLfloat v2[3], const GLfloat v3[3], int depth) {
-    if (depth == 0) {
-        GLfloat n1[3], n2[3], n3[3];
-        memcpy(n1, v1, sizeof(GLfloat)*3); normalize(n1); memcpy(n2, v2, sizeof(GLfloat)*3); normalize(n2); memcpy(n3, v3, sizeof(GLfloat)*3); normalize(n3);
-        glNormal3fv(n1); glVertex3fv(v1); glNormal3fv(n2); glVertex3fv(v2); glNormal3fv(n3); glVertex3fv(v3);
-        return;
+
+    // Initialize circling sphere's initial position
+    circlingSphereOrbitAngle = 0.0f;
+    float initialAngleRad = circlingSphereOrbitAngle * M3D_PI / 180.0f;
+    circlingSpherePos[0] = robotBasePosition[2] + circlingSphereOrbitRadius * cosf(initialAngleRad); // Orbit around robot's Z
+    circlingSpherePos[1] = circlingSphereHeight;
+    circlingSpherePos[2] = robotBasePosition[2] + circlingSphereOrbitRadius * sinf(initialAngleRad); // Orbit around robot's Z
+
+
+    glEnable(GL_TEXTURE_2D); glGenTextures(NUM_TEXTURES, textureObjects);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    const char* textureFiles[] = {"grass.tga", "wood.tga", "orb.tga"};
+    for (i = 0; i < NUM_TEXTURES; i++) {
+        GLbyte* pBytes; GLint iWidth, iHeight, iComponents; GLenum eFormat;
+        glBindTexture(GL_TEXTURE_2D, textureObjects[i]);
+        pBytes = loadTGA(textureFiles[i], &iWidth, &iHeight, &iComponents, &eFormat);
+        gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGB, iWidth, iHeight, eFormat, GL_UNSIGNED_BYTE, pBytes);
+        free(pBytes);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
-    GLfloat v12[3], v23[3], v31[3];
-    for (int i = 0; i < 3; i++) { v12[i] = (v1[i] + v2[i]) / 2.0f; v23[i] = (v2[i] + v3[i]) / 2.0f; v31[i] = (v3[i] + v1[i]) / 2.0f; }
-    normalize(v12); normalize(v23); normalize(v31);
-    drawTriangleRecursiveSmooth(v1, v12, v31, depth - 1); drawTriangleRecursiveSmooth(v2, v23, v12, depth - 1);
-    drawTriangleRecursiveSmooth(v3, v31, v23, depth - 1); drawTriangleRecursiveSmooth(v12, v23, v31, depth - 1);
 }
-void drawSubdividedSphereSmooth(int depth) {
-    glBegin(GL_TRIANGLES);
-    for (int i = 0; i < 20; i++) {
-        drawTriangleRecursiveSmooth(vdata[tindices[i][0]], vdata[tindices[i][1]], vdata[tindices[i][2]], depth);
+
+void ShutdownRC() { glDeleteTextures(NUM_TEXTURES, textureObjects); }
+
+void DrawGround() {
+    GLfloat fExtent = 20.0f, fStep = 1.0f, y = -0.4f, iStrip, iRun, s = 0.0f, t = 0.0f;
+    GLfloat texStepS = 1.0f / (fExtent * 2.0f / fStep); // Texcoord step for S direction
+    GLfloat texStepT = 1.0f / (fExtent * 2.0f / fStep); // Texcoord step for T direction
+
+
+    glBindTexture(GL_TEXTURE_2D, textureObjects[GROUND_TEXTURE]);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    s = 0.0f; // Reset s for each set of strips
+    for (iStrip = -fExtent; iStrip < fExtent; iStrip += fStep) {
+        t = 0.0f; // Reset t for each strip
+        glBegin(GL_TRIANGLE_STRIP);
+        for (iRun = fExtent; iRun >= -fExtent; iRun -= fStep) {
+            glTexCoord2f(s, t); glNormal3f(0.0f, 1.0f, 0.0f); glVertex3f(iStrip, y, iRun);
+            glTexCoord2f(s + texStepS, t); glNormal3f(0.0f, 1.0f, 0.0f); glVertex3f(iStrip + fStep, y, iRun);
+            t += texStepT;
+        }
+        glEnd();
+        s += texStepS;
     }
-    glEnd();
 }
 
-// --- OpenGL Callbacks ---
-void printControls() {
-    std::cout << "\n--- Lab: Icosahedron Rendering Modes (as per slide) ---\n"
-              << "Window shows three views (Left to Right):\n"
-              << "  1. Flat Shaded Icosahedron\n"
-              << "  2. Interpolated (Smooth) Shaded Icosahedron\n"
-              << "  3. Subdivided & Smooth Shaded Sphere (Default depth: " << subdivisionDepth << ")\n"
-              << "Controls:\n"
-              << " + / =: Increase subdivision depth (for rightmost sphere)\n"
-              << " - / _: Decrease subdivision depth (for rightmost sphere)\n"
-              << " L: Wireframe mode (lines) for all views\n"
-              << " P: Solid mode (fill polygons) for all views\n"
-              << " Arrow Keys: Rotate all objects\n"
-              << " Q or ESC: Quit\n"
-              << "---------------------------------------------------------\n" << std::endl;
+
+void DrawInhabitants(GLint nShadow) {
+    GLint i;
+
+    if (nShadow == 0) { // Drawing actual objects
+        if (!animationPaused) {
+            robotRotation += 0.5f; if (robotRotation > 360.0f) robotRotation -= 360.0f;
+            armSwing += 2.0f * animationDirection; legSwing += 1.5f * animationDirection;
+            if (armSwing > 30.0f || armSwing < -30.0f) animationDirection *= -1;
+
+            // Update circling sphere's position
+            circlingSphereOrbitAngle += circlingSphereOrbitSpeed;
+            if (circlingSphereOrbitAngle > 360.0f) circlingSphereOrbitAngle -= 360.0f;
+            float angleRad = circlingSphereOrbitAngle * M3D_PI / 180.0f;
+            // Orbit around the robot's XZ base position
+            circlingSpherePos[0] = robotBasePosition[0] + circlingSphereOrbitRadius * cosf(angleRad);
+            circlingSpherePos[1] = circlingSphereHeight;
+            circlingSpherePos[2] = robotBasePosition[2] + circlingSphereOrbitRadius * sinf(angleRad);
+        }
+    }
+
+    // Draw the randomly located static spheres
+    if (!nShadow) {
+        glColor3f(1.0f, 1.0f, 1.0f);
+        glBindTexture(GL_TEXTURE_2D, textureObjects[SPHERE_TEXTURE]);
+    }
+    for (i = 0; i < NUM_SPHERES; i++) {
+        glPushMatrix();
+        glTranslatef(spheres[i][0], spheres[i][1], spheres[i][2]);
+        drawSphere(0.3f, 21, 11);
+        glPopMatrix();
+    }
+
+    // Draw the circling sphere
+    if (!nShadow) { // If drawing actual object, ensure texture and color are set
+        glColor3f(1.0f, 1.0f, 1.0f); // Could be a different color if desired
+        glBindTexture(GL_TEXTURE_2D, textureObjects[SPHERE_TEXTURE]); // Or a different texture
+    }
+    glPushMatrix();
+    glTranslatef(circlingSpherePos[0], circlingSpherePos[1], circlingSpherePos[2]);
+    drawSphere(circlingSphereObjectRadius, 21, 11);
+    glPopMatrix();
+
+
+    // Draw the robot
+    glPushMatrix();
+    glTranslatef(robotBasePosition[0], robotBasePosition[1], robotBasePosition[2]);
+    glRotatef(robotRotation, 0.0f, 1.0f, 0.0f);
+    glScalef(0.4f, 0.4f, 0.4f);
+    drawRobot(nShadow);
+    glPopMatrix();
 }
 
-void display() {
-    GLint W = windowWidth;
-    GLint H = windowHeight;
-    if (H == 0) H = 1;
-    GLint sub_width = W / 3;
+void RenderScene() {
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    glPushMatrix();
+    glTranslatef(-cameraPos[0], -cameraPos[1], -cameraPos[2]);
+    glRotatef(cameraRotY, 0.0f, 1.0f, 0.0f);
+    glLightfv(GL_LIGHT0, GL_POSITION, fLightPos);
 
-    // Common camera view parameters (object at origin, camera on Z axis)
-    GLfloat eyeX_cam = 0.0, eyeY_cam = 0.0, eyeZ_cam = 2.5;
-    GLfloat centerX_cam = 0.0, centerY_cam = 0.0, centerZ_cam = 0.0;
-    GLfloat upX_cam = 0.0, upY_cam = 1.0, upZ_cam = 0.0;
+    glColor3f(0.8f, 0.8f, 0.8f); DrawGround();
 
-    // Common projection parameters
-    GLfloat fovy = 60.0f;
-    GLfloat zNear = 0.1f;
-    GLfloat zFar = 100.0f;
+    glDisable(GL_DEPTH_TEST); glDisable(GL_LIGHTING); glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_STENCIL_TEST);
+    glPushMatrix();
+    glMultMatrixf(mShadowMatrix);
+    glColor4f(0.0f, 0.0f, 0.0f, 0.4f);
+    DrawInhabitants(1); // Draw shadows
+    glPopMatrix();
+    glDisable(GL_STENCIL_TEST); glDisable(GL_BLEND);
+    glEnable(GL_TEXTURE_2D); glEnable(GL_LIGHTING); glEnable(GL_DEPTH_TEST);
 
-    glEnable(GL_SCISSOR_TEST);
+    DrawInhabitants(0); // Draw actual objects
 
-    glMaterialfv(GL_FRONT, GL_AMBIENT, mat_ambient);
-    glMaterialfv(GL_FRONT, GL_DIFFUSE, mat_diffuse);
-    glMaterialfv(GL_FRONT, GL_SPECULAR, mat_specular);
-    glMaterialf(GL_FRONT, GL_SHININESS, mat_shininess);
-    glPolygonMode(GL_FRONT_AND_BACK, polyMode);
-
-    // --- Viewport 1: Flat Icosahedron (Left) ---
-    glViewport(0, 0, sub_width, H);
-    glScissor(0, 0, sub_width, H);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    GLfloat aspect_vp1 = (GLfloat)sub_width / (GLfloat)H;
-    glMatrixMode(GL_PROJECTION); glLoadIdentity(); gluPerspective(fovy, aspect_vp1, zNear, zFar);
-    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-    gluLookAt(eyeX_cam, eyeY_cam, eyeZ_cam, centerX_cam, centerY_cam, centerZ_cam, upX_cam, upY_cam, upZ_cam);
-    // Object is drawn at origin, rotations applied
-    glRotatef(rotX, 1.0f, 0.0f, 0.0f); glRotatef(rotY, 0.0f, 1.0f, 0.0f);
-    glShadeModel(GL_FLAT);
-    glCallList(flatIcosahedronList);
-
-    // --- Viewport 2: Smooth/Interpolated Icosahedron (Center) ---
-    glViewport(sub_width, 0, sub_width, H);
-    glScissor(sub_width, 0, sub_width, H);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    GLfloat aspect_vp2 = (GLfloat)sub_width / (GLfloat)H;
-    glMatrixMode(GL_PROJECTION); glLoadIdentity(); gluPerspective(fovy, aspect_vp2, zNear, zFar);
-    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-    gluLookAt(eyeX_cam, eyeY_cam, eyeZ_cam, centerX_cam, centerY_cam, centerZ_cam, upX_cam, upY_cam, upZ_cam);
-    // Object is drawn at origin, rotations applied
-    glRotatef(rotX, 1.0f, 0.0f, 0.0f); glRotatef(rotY, 0.0f, 1.0f, 0.0f);
-    glShadeModel(GL_SMOOTH);
-    glCallList(smoothIcosahedronList);
-
-    // --- Viewport 3: Subdivided Sphere (Right) ---
-    GLint vp3_x = 2 * sub_width; GLint vp3_width = W - vp3_x;
-    glViewport(vp3_x, 0, vp3_width, H);
-    glScissor(vp3_x, 0, vp3_width, H);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    GLfloat aspect_vp3 = (GLfloat)vp3_width / (GLfloat)H;
-    glMatrixMode(GL_PROJECTION); glLoadIdentity(); gluPerspective(fovy, aspect_vp3, zNear, zFar);
-    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-    gluLookAt(eyeX_cam, eyeY_cam, eyeZ_cam, centerX_cam, centerY_cam, centerZ_cam, upX_cam, upY_cam, upZ_cam);
-    // Object is drawn at origin, rotations applied
-    glRotatef(rotX, 1.0f, 0.0f, 0.0f); glRotatef(rotY, 0.0f, 1.0f, 0.0f);
-    glShadeModel(GL_SMOOTH);
-    drawSubdividedSphereSmooth(subdivisionDepth);
-
-    glDisable(GL_SCISSOR_TEST);
+    glPopMatrix();
     glutSwapBuffers();
 }
 
-void reshape(int w, int h) {
-    windowWidth = w;
-    windowHeight = h;
-}
-
-void keyboard(unsigned char key, int x, int y) {
-    switch (key) {
-        case 27: case 'q': case 'Q':
-            glDeleteLists(flatIcosahedronList, 1);
-            glDeleteLists(smoothIcosahedronList, 1);
-            exit(0);
-            break;
-        case '+': case '=':
-            subdivisionDepth++;
-            if (subdivisionDepth > 6) subdivisionDepth = 6;
-            std::cout << "Subdivision Depth (Right Sphere): " << subdivisionDepth << std::endl;
-            //printControls(); // Optional: Re-print controls if depth changes default display
-            break;
-        case '-': case '_':
-            if (subdivisionDepth > 0) subdivisionDepth--; // Keep it at 0 or above
-            std::cout << "Subdivision Depth (Right Sphere): " << subdivisionDepth << std::endl;
-            //printControls(); // Optional
-            break;
-        case 'l': case 'L':
-            polyMode = GL_LINE; std::cout << "Polygon Mode: Line (Wireframe)" << std::endl;
-            break;
-        case 'p': case 'P':
-            polyMode = GL_FILL; std::cout << "Polygon Mode: Fill (Solid)" << std::endl;
-            break;
-    }
+void SpecialKeys(int key, int x, int y) {
+    float movementSpeed = 0.2f; float rotationSpeed = 2.0f;
+    float radRotY = cameraRotY * M3D_PI / 180.0f;
+    if (key == GLUT_KEY_UP) { cameraPos[0] -= sin(radRotY) * movementSpeed; cameraPos[2] -= cos(radRotY) * movementSpeed; }
+    if (key == GLUT_KEY_DOWN) { cameraPos[0] += sin(radRotY) * movementSpeed; cameraPos[2] += cos(radRotY) * movementSpeed; }
+    if (key == GLUT_KEY_LEFT) { cameraRotY += rotationSpeed; }
+    if (key == GLUT_KEY_RIGHT) { cameraRotY -= rotationSpeed; }
+    if (key == GLUT_KEY_PAGE_UP) { cameraPos[1] += movementSpeed; }
+    if (key == GLUT_KEY_PAGE_DOWN) { cameraPos[1] -= movementSpeed; }
     glutPostRedisplay();
 }
 
-void specialKeys(int key, int x, int y) {
-    switch (key) {
-        case GLUT_KEY_UP:    rotX -= 5.0f; break; case GLUT_KEY_DOWN:  rotX += 5.0f; break;
-        case GLUT_KEY_LEFT:  rotY -= 5.0f; break; case GLUT_KEY_RIGHT: rotY += 5.0f; break;
-    }
-    if (rotX >= 360.0f) rotX -= 360.0f; if (rotX < 0.0f) rotX += 360.0f;
-    if (rotY >= 360.0f) rotY -= 360.0f; if (rotY < 0.0f) rotY += 360.0f;
+void KeyboardKeys(unsigned char key, int x, int y) {
+    if (key == ' ') animationPaused = !animationPaused;
+    if (key == 27) { ShutdownRC(); exit(0); }
     glutPostRedisplay();
 }
 
-void compileDisplayLists() {
-    flatIcosahedronList = glGenLists(1);
-    glNewList(flatIcosahedronList, GL_COMPILE);
-        drawIcosahedronFlatInternal();
-    glEndList();
-
-    smoothIcosahedronList = glGenLists(1);
-    glNewList(smoothIcosahedronList, GL_COMPILE);
-        drawIcosahedronSmoothInternal();
-    glEndList();
-    std::cout << "Display lists compiled." << std::endl;
+void TimerFunction(int value) {
+    glutPostRedisplay();
+    glutTimerFunc(16, TimerFunction, 1);
 }
 
-void initGL() {
-    glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_LIGHTING);
-    glEnable(GL_LIGHT0);
-    glLightfv(GL_LIGHT0, GL_POSITION, light_pos);
-    glLightfv(GL_LIGHT0, GL_AMBIENT, light_ambient);
-    glLightfv(GL_LIGHT0, GL_DIFFUSE, light_diffuse);
-    glLightfv(GL_LIGHT0, GL_SPECULAR, light_specular);
-    glEnable(GL_CULL_FACE); glCullFace(GL_BACK); glFrontFace(GL_CCW);
-    compileDisplayLists();
-    printControls();
+void ChangeSize(int w, int h) {
+    if (h == 0) h = 1; GLfloat fAspect = (GLfloat)w / (GLfloat)h;
+    glViewport(0, 0, w, h); glMatrixMode(GL_PROJECTION); glLoadIdentity();
+    gluPerspective(45.0f, fAspect, 0.5f, 100.0f);
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char* argv[]) {
     glutInit(&argc, argv);
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
-    glutInitWindowSize(windowWidth, windowHeight);
-    glutInitWindowPosition(100, 100);
-    glutCreateWindow("Lab: Flat | Interpolate | Subdivide (Centered Viewports)");
-    initGL();
-    glutDisplayFunc(display);
-    glutReshapeFunc(reshape);
-    glutKeyboardFunc(keyboard);
-    glutSpecialFunc(specialKeys);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH | GLUT_STENCIL);
+    glutInitWindowSize(800, 600);
+    glutCreateWindow("OpenGL Robot World with Orbiting Sphere - SPACE:Pause, Arrows:Move, PgUp/Dn:Elevate, ESC:Exit");
+    glutReshapeFunc(ChangeSize); glutDisplayFunc(RenderScene);
+    glutSpecialFunc(SpecialKeys); glutKeyboardFunc(KeyboardKeys);
+    SetupRC();
+    glutTimerFunc(16, TimerFunction, 1);
     glutMainLoop();
+    ShutdownRC();
     return 0;
 }
